@@ -355,6 +355,16 @@ export async function POST(request: Request) {
 
 **Patterns**: Always mock `@/lib/supabase/server`. Use `vi.clearAllMocks()` and `eventBus.clear()` in `beforeEach`. API route tests: mock `@/lib/init` and lib functions, test auth (401), validation (400), not found (404), errors (500), happy path.
 
+### Testing database-level logic (pg-real)
+
+Mocked Supabase clients cannot exercise Postgres triggers, RPCs, or RLS policies. A parallel Vitest project `pg-real` runs against a real Postgres instance in CI (GitHub Actions `supabase/postgres:15` service container, migrations replayed from `supabase/migrations/` before the suite runs). Locally: `npm run test:pg` against a DATABASE_URL pointing at any Postgres with the Supabase `auth` schema and migrations applied.
+
+**File convention**: `*.pg.test.ts`. The `unit` project excludes this suffix; only `pg-real` picks it up.
+
+**Helpers**: `tests/pg/setup.ts` exposes `getPool()` and `withUserContext(userId, fn)` (sets `ROLE authenticated` + `request.jwt.claims` for RLS tests). `tests/pg/fixtures.ts` has `seedCompany()`, `insertDraftJournalEntry()`, `insertBalancedLines()`, etc.
+
+**When to add a pg-real test**: any PR that creates or modifies a trigger, RPC, RLS policy, or DEFERRABLE constraint must include or extend a `*.pg.test.ts` test covering the new behavior. Mock coverage is not sufficient — it will pass on a broken migration. The suite is intentionally small (compliance gate, not a rewrite of the mock suite); add only smoke-level tests for new DB-layer constructs.
+
 ---
 
 ## Database & Migrations
