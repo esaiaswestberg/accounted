@@ -9,12 +9,17 @@ import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 
 let resultIdx: number
 let results: Array<{ data?: unknown; error?: unknown }>
+let inserts: Array<{ table: string; payload: unknown }>
 
-function makeBuilder() {
+function makeBuilder(table: string) {
   const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'insert', 'update', 'delete']) {
+  for (const m of ['select', 'eq', 'in', 'update', 'delete']) {
     b[m] = vi.fn().mockReturnValue(b)
   }
+  b.insert = vi.fn().mockImplementation((payload: unknown) => {
+    inserts.push({ table, payload })
+    return b
+  })
   b.single = vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null })
   b.then = (resolve: (v: unknown) => void) => resolve(results[resultIdx++] ?? { data: null, error: null })
   return b
@@ -22,7 +27,7 @@ function makeBuilder() {
 
 function makeClient() {
   return {
-    from: vi.fn().mockImplementation(() => makeBuilder()),
+    from: vi.fn().mockImplementation((table: string) => makeBuilder(table)),
     rpc: vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null }),
   }
 }
@@ -30,7 +35,6 @@ function makeClient() {
 vi.mock('@/lib/bookkeeping/engine', () => ({
   validateBalance: vi.fn().mockReturnValue({ valid: true, totalDebit: 1000, totalCredit: 1000 }),
   getNextVoucherNumber: vi.fn(async () => ++resultIdx), // just increment
-  getSwedishLocalDate: vi.fn().mockReturnValue('2024-06-15'),
 }))
 
 import { correctEntry } from '../storno-service'
@@ -41,6 +45,7 @@ beforeEach(() => {
   eventBus.clear()
   resultIdx = 0
   results = []
+  inserts = []
 
   // Reset the mock implementations after clearAllMocks
   vi.mocked(validateBalance).mockReturnValue({ valid: true, totalDebit: 1000, totalCredit: 1000 })
@@ -191,6 +196,20 @@ describe('correctEntry', () => {
     await expect(
       correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines)
     ).rejects.toThrow(BookkeepingDatabaseError)
+  })
+
+  it('mirrors original.entry_date on storno + corrected entries (rättelsen stannar i ursprungsperioden)', async () => {
+    setupResults()
+    const supabase = makeClient()
+    await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines)
+
+    const journalEntryInserts = inserts
+      .filter((i) => i.table === 'journal_entries')
+      .map((i) => i.payload as { entry_date: string; source_type: string })
+
+    expect(journalEntryInserts).toHaveLength(2)
+    expect(journalEntryInserts[0]).toMatchObject({ source_type: 'storno', entry_date: '2024-06-15' })
+    expect(journalEntryInserts[1]).toMatchObject({ source_type: 'correction', entry_date: '2024-06-15' })
   })
 
   it('emits journal_entry.corrected event', async () => {

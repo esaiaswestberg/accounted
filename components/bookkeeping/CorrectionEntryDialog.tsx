@@ -156,6 +156,9 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
             <li>En <strong>stornoverifikation</strong> som nollställer den ursprungliga</li>
             <li>En ny verifikation med dina rättade uppgifter</li>
           </ol>
+          <p className="mt-2">
+            Rättelsen bokförs i samma räkenskapsperiod som originalet — du hittar den under originalets räkenskapsår.
+          </p>
         </div>
 
         {/* Original entry (read-only) */}

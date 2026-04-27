@@ -5,7 +5,7 @@ import type {
   JournalEntry,
   JournalEntryLine,
 } from '@/types'
-import { validateBalance, getNextVoucherNumber, getSwedishLocalDate } from '@/lib/bookkeeping/engine'
+import { validateBalance, getNextVoucherNumber } from '@/lib/bookkeeping/engine'
 import {
   AccountsNotInChartError,
   BookkeepingDatabaseError,
@@ -99,7 +99,7 @@ export async function correctEntry(
       fiscal_period_id: original.fiscal_period_id,
       voucher_number: reversalVoucherNumber,
       voucher_series: original.voucher_series || 'A',
-      entry_date: getSwedishLocalDate(),
+      entry_date: original.entry_date,
       description: `Storno: ${original.description}`,
       source_type: 'storno',
       reverses_id: originalEntryId,
@@ -195,7 +195,7 @@ export async function correctEntry(
         fiscal_period_id: original.fiscal_period_id,
         voucher_number: correctedVoucherNumber,
         voucher_series: original.voucher_series || 'A',
-        entry_date: getSwedishLocalDate(),
+        entry_date: original.entry_date,
         description: `Rättelse: ${original.description}`,
         source_type: 'correction',
         correction_of_id: originalEntryId,
