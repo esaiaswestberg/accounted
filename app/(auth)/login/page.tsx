@@ -107,7 +107,9 @@ export default function LoginPage() {
           document.cookie = 'gnubok-invite-token=; path=/; max-age=0'
         }
 
-        router.push('/')
+        // Always land on the picker after BankID login so the user sees
+        // fresh CompanyRoles fetched during this session's enrichment.
+        router.push('/select-company')
         router.refresh()
       } catch (error) {
         console.error('[login] BankID complete error', error)

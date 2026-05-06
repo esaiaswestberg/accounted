@@ -9,6 +9,7 @@ interface CompanyContextValue {
   companies: { company: Company; role: CompanyRole }[]
   isTeamMember: boolean
   team: Team | null
+  isSandbox: boolean
 }
 
 const CompanyContext = createContext<CompanyContextValue | null>(null)
@@ -27,4 +28,8 @@ export function useCompany() {
   const ctx = useContext(CompanyContext)
   if (!ctx) throw new Error('useCompany must be used within CompanyProvider')
   return ctx
+}
+
+export function useCompanyOptional() {
+  return useContext(CompanyContext)
 }

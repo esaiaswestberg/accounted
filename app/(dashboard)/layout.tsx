@@ -81,6 +81,7 @@ export default async function DashboardLayout({
           companies: [],
           isTeamMember,
           team,
+          isSandbox: false,
         }}
       >
         <CompanyTabSync />
@@ -130,6 +131,7 @@ export default async function DashboardLayout({
       })),
       isTeamMember,
       team,
+      isSandbox: false,
     }
 
     return (
@@ -179,6 +181,10 @@ export default async function DashboardLayout({
   const displayName = settings?.company_name || companyRow.name
   const companyWithName = { ...companyRow, name: displayName }
 
+  const entityType = (settings?.entity_type as EntityType) || 'enskild_firma'
+
+  const isSandbox = settings?.is_sandbox === true
+
   const companyContextValue = {
     company: companyWithName,
     role: memberRow.role as CompanyRole,
@@ -192,11 +198,8 @@ export default async function DashboardLayout({
     }),
     isTeamMember,
     team,
+    isSandbox,
   }
-
-  const entityType = (settings?.entity_type as EntityType) || 'enskild_firma'
-
-  const isSandbox = settings?.is_sandbox === true
 
   return (
     <CompanyProvider value={companyContextValue}>

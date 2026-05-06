@@ -144,7 +144,7 @@ function RegisterPageContent() {
         return
       }
 
-      router.push('/')
+      router.push('/select-company')
       router.refresh()
     } catch (error) {
       console.error('[register] BankID signup error', error)

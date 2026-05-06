@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { cn } from '@/lib/utils'
 import { Mail, Loader2, Send } from 'lucide-react'
 import {
@@ -15,6 +15,8 @@ import {
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
+import { submitFeedback } from '@/lib/support/submit-feedback'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
 
 interface SupportLinkProps {
   variant?: 'inline' | 'muted'
@@ -29,48 +31,36 @@ export function SupportLink({
   children,
   className,
 }: SupportLinkProps) {
-  const [mounted, setMounted] = useState(false)
   const [open, setOpen] = useState(false)
   const [message, setMessage] = useState('')
   const [isSending, setIsSending] = useState(false)
   const [sent, setSent] = useState(false)
   const { toast } = useToast()
+  const companyCtx = useCompanyOptional()
 
-  useEffect(() => {
-    setMounted(true)
-  }, [])
+  if (companyCtx?.isSandbox) return null
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (message.trim().length < 5) return
 
     setIsSending(true)
-    try {
-      const res = await fetch('/api/support/contact', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subject, message: message.trim() }),
-      })
+    const result = await submitFeedback({ subject, message: message.trim() })
+    setIsSending(false)
 
-      if (!res.ok) {
-        const data = await res.json()
-        throw new Error(data.error || 'Kunde inte skicka meddelandet')
-      }
-
+    if (result.ok) {
       setSent(true)
       setTimeout(() => {
         setOpen(false)
         setSent(false)
         setMessage('')
       }, 2000)
-    } catch (error) {
+    } else {
       toast({
         title: 'Kunde inte skicka',
-        description: error instanceof Error ? error.message : 'Försök igen.',
+        description: result.error || 'Försök igen.',
         variant: 'destructive',
       })
-    } finally {
-      setIsSending(false)
     }
   }
 
@@ -105,10 +95,6 @@ export function SupportLink({
         {children ?? 'Kontakta support'}
       </button>
     )
-
-  if (!mounted) {
-    return trigger
-  }
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>

@@ -172,6 +172,7 @@ export async function skvRequest(
     method,
     headers,
     body: serializedBody,
+    signal: AbortSignal.timeout(15_000),
   })
 
   // Handle Skatteverket-specific auth/throttle errors uniformly so callers

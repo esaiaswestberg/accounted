@@ -15,7 +15,7 @@ vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
 }))
 
-import { collectBankIdResult } from '../lib/bankid-client'
+import { collectBankIdResult, requestEnrichment, fetchEnrichmentData } from '../lib/bankid-client'
 import { createServiceClient } from '@/lib/supabase/server'
 import { ticExtension } from '../index'
 
@@ -205,6 +205,102 @@ describe('POST /bankid/complete', () => {
       expect(status).toBe(404)
       expect(body.error).toBe('no_account')
       expect(admin.generateLink).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('enrichment — SPAR + CompanyRoles', () => {
+    it('requests both SPAR and CompanyRoles, fetches data, and persists only companyRoles (no PII) to extension_data', async () => {
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      vi.mocked(requestEnrichment).mockResolvedValueOnce({
+        enrichmentId: 'enr-1',
+        sessionId: 'test-session',
+        status: 'Completed',
+        requestedTypes: ['SPAR', 'CompanyRoles'],
+        completedTypes: ['SPAR', 'CompanyRoles'],
+        secureUrl: '/api/v1/enrichment/data/abc',
+        secureUrlExpiresAtUtc: '2026-05-06T12:00:00Z',
+      })
+      vi.mocked(fetchEnrichmentData).mockResolvedValueOnce({
+        personalNumber: '199001011234',
+        name: 'Anna Andersson',
+        enrichedAtUtc: '2026-05-06T11:30:00Z',
+        spar: {
+          Person_IdNummer: '199001011234',
+          Person_PersonIdTyp: 'PERSONNR',
+          Skydd_Sekretessmarkering: false,
+          Skydd_SkyddadFolkbokforing: false,
+          Namn_Fornamn: 'Anna',
+          Namn_Efternamn: 'Andersson',
+          PersonDetaljer_Kon: 'K',
+          PersonDetaljer_Fodelsedatum: '1990-01-01',
+          Folkbokforingsadress_SvenskAdress_Utdelningsadress1: 'Storgatan 1',
+          Folkbokforingsadress_SvenskAdress_PostNr: '11122',
+          Folkbokforingsadress_SvenskAdress_Postort: 'Stockholm',
+        },
+        companyRoles: [
+          {
+            companyId: 12345,
+            companyRegistrationNumber: '5566778899',
+            legalName: 'Exempel AB',
+            legalEntityType: 'AB',
+            positionTypes: ['LED'],
+            positionDescriptions: ['Styrelseledamot'],
+            positionStart: '2020-01-15',
+            positionEnd: null,
+            companyStatus: 'Aktivt',
+          },
+        ],
+      })
+      const { client } = mockServiceClient([
+        { data: null }, // pnr lookup → not linked
+        { data: null }, // email lookup → not taken
+        { error: null }, // bankid_identities insert OK
+      ])
+
+      // Intercept the extension_data upsert so we can assert the persisted shape
+      // contains no SPAR / personnummer / name. Other tables fall through to the
+      // queued chain.
+      const upsertSpy = vi.fn().mockResolvedValue({ error: null })
+      const origFrom = client.from as unknown as ReturnType<typeof vi.fn>
+      const queuedFrom = origFrom.getMockImplementation() as (table: string) => unknown
+      origFrom.mockImplementation((table: string) => {
+        if (table === 'extension_data') {
+          return { upsert: upsertSpy }
+        }
+        return queuedFrom(table)
+      })
+
+      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+        method: 'POST',
+        body: { sessionId: 'test-session', mode: 'signup', email: 'fresh@example.com' },
+      })
+      const { status, body } = await parseJsonResponse<{
+        data?: { tokenHash?: string; isNewUser?: boolean }
+      }>(await findCompleteHandler()(req))
+
+      expect(status).toBe(200)
+      expect(body.data?.isNewUser).toBe(true)
+      expect(vi.mocked(requestEnrichment)).toHaveBeenCalledWith(
+        'test-session',
+        ['SPAR', 'CompanyRoles']
+      )
+      expect(vi.mocked(fetchEnrichmentData)).toHaveBeenCalledWith('/api/v1/enrichment/data/abc')
+
+      // Persisted blob must contain companyRoles + enrichedAtUtc only.
+      // SPAR (personnummer / name / address / birth date) must NOT be stored,
+      // even when TIC returns it — those fields live in bankid_identities (encrypted).
+      expect(upsertSpy).toHaveBeenCalledTimes(1)
+      const [persistedRow] = upsertSpy.mock.calls[0] as [
+        { key: string; value: Record<string, unknown> },
+      ]
+      expect(persistedRow.key).toBe('bankid_enrichment')
+      expect(persistedRow.value).toEqual({
+        companyRoles: expect.any(Array),
+        enrichedAtUtc: '2026-05-06T11:30:00Z',
+      })
+      expect(persistedRow.value).not.toHaveProperty('spar')
+      expect(persistedRow.value).not.toHaveProperty('personalNumber')
+      expect(persistedRow.value).not.toHaveProperty('name')
     })
   })
 

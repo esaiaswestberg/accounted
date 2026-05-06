@@ -30,14 +30,20 @@ import crypto from 'crypto'
 const log = createLogger('tic/bankid')
 
 /**
- * Request CompanyRoles enrichment for a completed BankID session and cache
- * the result in `extension_data` so /select-company can pre-fill the picker.
+ * Request SPAR + CompanyRoles enrichment for a completed BankID session and
+ * cache the CompanyRoles slice in `extension_data` for the
+ * /select-company picker.
+ *
+ * SPAR (personnummer, address, name, birth date) is requested so TIC will
+ * complete the enrichment, but is intentionally NOT persisted: personnummer
+ * is already hashed + encrypted in `bankid_identities`, names live there too,
+ * and no UI currently consumes the address. Storing the SPAR blob in
+ * `extension_data.value` (a plain JSON column) would expose national-ID-level
+ * PII to anyone with read access. If/when address pre-fill is built, encrypt
+ * the relevant fields the same way `encryptPersonalNumber` does for pnr.
+ *
  * Non-blocking: any failure is logged and swallowed — BankID auth must still
  * succeed even if enrichment is down.
- *
- * Only types currently enabled on the TIC tenant are requested — see the
- * block comment inside the function. If Address (formerly SPAR) is enabled
- * later, add it here to restore address pre-fill in the manual wizard.
  */
 async function fetchAndStoreEnrichment(
   sessionId: string,
@@ -45,19 +51,15 @@ async function fetchAndStoreEnrichment(
   supabase: SupabaseClient,
 ): Promise<void> {
   try {
-    // IMPORTANT: only request types that are actually enabled on the TIC
-    // tenant. Requesting an unknown/disabled type (e.g. 'SPAR', which TIC
-    // has renamed to 'Address' and which our tenant currently has off)
-    // makes TIC reject the whole enrichment with
-    // `error: 'Session not completed'` — a misleading error that took a
-    // round of debugging to trace. Verified via GET /api/v1/enrichment/types:
-    //   { type: 'CompanyRoles', enabled: true  }  ← we want this
-    //   { type: 'Address',      enabled: false }  ← formerly SPAR, off
+    // Both 'SPAR' and 'CompanyRoles' are enabled on our TIC tenant as of
+    // 2026-05-06 (TIC ticket re. enrichment). Verify with:
+    //   curl -H "X-Api-Key: $KEY" https://id.tic.io/api/v1/enrichment/types
     //
-    // If 'Address' gets enabled later, add it here (and wire up the
-    // address pre-fill in WelcomeOnboarding and createCompanyFromTicRole
-    // — both already look for a `.spar` field that TIC may have renamed).
-    const enrichment = await requestEnrichment(sessionId, ['CompanyRoles'])
+    // If a requested type is disabled on the tenant, TIC rejects the WHOLE
+    // enrichment with body field `error: 'Session not completed'` (HTTP 200,
+    // not a real HTTP error). The message is misleading — it does NOT mean
+    // the BankID session is incomplete. The hint mapping below catches it.
+    const enrichment = await requestEnrichment(sessionId, ['SPAR', 'CompanyRoles'])
     log.info('enrichment request returned', {
       status: enrichment.status,
       requestedTypes: enrichment.requestedTypes,
@@ -102,10 +104,10 @@ async function fetchAndStoreEnrichment(
     const enrichmentData = await fetchEnrichmentData(enrichment.secureUrl)
 
     // Log a PII-free snapshot so we can debug the role filter in production.
-    // Raw personnummer/names are deliberately omitted. `spar`/`address` not
-    // logged — we don't request those types currently (see block comment
-    // on requestEnrichment above), so they'd always be absent.
+    // Raw personnummer / names / address values are deliberately omitted —
+    // only flat booleans and counts.
     const firstRole = enrichmentData.companyRoles?.[0]
+    const spar = enrichmentData.spar
     log.info('enrichment data shape', {
       companyCount: enrichmentData.companyRoles?.length ?? 0,
       firstRoleStatuses: firstRole
@@ -116,7 +118,17 @@ async function fetchAndStoreEnrichment(
             legalEntityType: firstRole.legalEntityType,
           }
         : null,
+      hasSpar: !!spar,
+      sparHasAddress: !!spar?.Folkbokforingsadress_SvenskAdress_Utdelningsadress1,
+      sparHasProtection: !!(spar?.Skydd_Sekretessmarkering || spar?.Skydd_SkyddadFolkbokforing),
     })
+
+    // Persist only what consumers actually read. See block comment on
+    // fetchAndStoreEnrichment for why SPAR + personnummer + name are excluded.
+    const persistedValue = {
+      companyRoles: enrichmentData.companyRoles ?? [],
+      enrichedAtUtc: enrichmentData.enrichedAtUtc,
+    }
 
     await supabase
       .from('extension_data')
@@ -124,7 +136,7 @@ async function fetchAndStoreEnrichment(
         user_id: userId,
         extension_id: 'tic',
         key: 'bankid_enrichment',
-        value: enrichmentData,
+        value: persistedValue,
       }, { onConflict: 'user_id,extension_id,key' })
   } catch (enrichError) {
     log.warn('enrichment failed (non-blocking)', enrichError)
