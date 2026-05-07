@@ -13,6 +13,18 @@ import type { InvoiceExtractionResult } from '@/types'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import { validateOcrReference, validateBankgiroNumber } from '@/lib/bankgiro/luhn'
 
+// pdfjs-dist references DOMMatrix/ImageData/Path2D at module load. On
+// Vercel's Node runtime these globals don't exist; without stubs the
+// dynamic import throws "DOMMatrix is not defined" before getDocument()
+// runs. We only call getTextContent (no rendering), so empty-class stubs
+// are enough — pdfjs never invokes any methods on them.
+{
+  const g = globalThis as unknown as { DOMMatrix?: unknown; ImageData?: unknown; Path2D?: unknown }
+  if (typeof g.DOMMatrix === 'undefined') g.DOMMatrix = class {}
+  if (typeof g.ImageData === 'undefined') g.ImageData = class {}
+  if (typeof g.Path2D === 'undefined') g.Path2D = class {}
+}
+
 // Below this we treat the document as image-only / unreadable and skip
 // regex extraction. pdfjs-dist returns near-zero text for scanned PDFs.
 const MIN_TEXT_CHARS_FOR_EXTRACTION = 10

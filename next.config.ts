@@ -20,6 +20,11 @@ const cspDirectives = [
 
 const nextConfig: NextConfig = {
   output: 'standalone',
+  // Keep pdfjs-dist out of the bundle. The legacy build references
+  // @napi-rs/canvas at module load and breaks Vercel's bundling step.
+  // Text extraction works in pure Node once DOM globals are stubbed at
+  // the call site (see extensions/general/invoice-inbox/lib/extract-invoice-fields.ts).
+  serverExternalPackages: ['pdfjs-dist'],
   async redirects() {
     return [
       {
