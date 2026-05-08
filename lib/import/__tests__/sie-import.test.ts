@@ -421,6 +421,37 @@ describe('ensureFiscalPeriod validation', () => {
 
     expect(id).toBe('existing-period-id')
   })
+
+  it('rejects when an existing period overlaps the range but does not fully contain it', async () => {
+    // Regression: previously fell through to the overlapping period silently,
+    // which stamped every imported voucher with a fiscal_period_id whose
+    // window did not cover the voucher's own entry_date — breaking the SIE
+    // invariant and BFL 5 kap. (verifikationsnummer per räkenskapsår).
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: null, error: null }, // containing check — no match
+      {
+        data: [
+          {
+            id: 'calendar-2026',
+            period_start: '2026-01-01',
+            period_end: '2026-12-31',
+            name: 'Räkenskapsår 2026',
+          },
+        ],
+        error: null,
+      },
+    ])
+
+    await expect(
+      ensureFiscalPeriod(
+        supabase as unknown as Supabase,
+        'company-id',
+        '2025-03-01', // Capelix-style broken FY March–Feb
+        '2026-02-28',
+      ),
+    ).rejects.toThrow(/överlappar men matchar inte/)
+  })
 })
 
 describe('linkOpeningBalanceEntryToPeriod', () => {
