@@ -60,6 +60,7 @@ interface NavItem {
   hidden?: boolean // Temporarily hide from sidebar
   comingSoon?: boolean // Visible but disabled; shows "Kommer snart" badge
   devBadge?: boolean // Shows a "Dev" badge to indicate dev-only feature
+  betaBadge?: boolean // Clickable; shows a "Beta" badge to indicate feature in testing
 }
 
 // All nav items for sidebar and mobile drawer
@@ -80,10 +81,10 @@ const navItems: NavItem[] = [
   { href: '/bookkeeping', label: 'Bokföring', icon: BookOpen, group: 'redovisning' },
   { href: '/reports', label: 'Rapporter', icon: BarChart3, group: 'redovisning' },
   { href: '/import', label: 'Importera', icon: Upload, group: 'redovisning' },
-  // Personal — temporarily disabled in production pending feature completion.
-  // Still clickable in local dev (NODE_ENV === 'development') so we can test.
-  { href: '/salary', label: 'Löner', icon: HandCoins, group: 'personal', modes: ['aktiebolag'], comingSoon: process.env.NODE_ENV !== 'development' },
-  { href: '/salary/employees', label: 'Anställda', icon: Users, group: 'personal', modes: ['aktiebolag'], comingSoon: process.env.NODE_ENV !== 'development' },
+  // Personal — enabled in production with a "Beta" badge while we validate the
+  // end-to-end salary + AGI flow with real customers.
+  { href: '/salary', label: 'Löner', icon: HandCoins, group: 'personal', modes: ['aktiebolag'], betaBadge: true },
+  { href: '/salary/employees', label: 'Anställda', icon: Users, group: 'personal', modes: ['aktiebolag'], betaBadge: true },
   { href: '/help', label: 'Hjälp', icon: HelpCircle, group: 'övrigt' },
   { href: '/settings', label: 'Inställningar', icon: Settings, group: 'övrigt' },
 ]
@@ -274,6 +275,10 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                           ) : item.devBadge ? (
                             <span className="ml-auto rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5">
                               Dev
+                            </span>
+                          ) : item.betaBadge ? (
+                            <span className="ml-auto rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5">
+                              Beta
                             </span>
                           ) : badge !== null && (
                             <span className="ml-auto min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1">
@@ -605,6 +610,10 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                           ) : item.devBadge ? (
                             <span className="rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5">
                               Dev
+                            </span>
+                          ) : item.betaBadge ? (
+                            <span className="rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5">
+                              Beta
                             </span>
                           ) : badge !== null && (
                             <span className="min-w-[20px] h-[20px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1.5">
