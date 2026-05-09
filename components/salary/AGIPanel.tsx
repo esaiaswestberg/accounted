@@ -734,62 +734,55 @@ export function AGIPanel(props: AGIPanelProps) {
         )}
 
         {!readOnly && !isSigned && (
-          <div className="flex flex-wrap gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleSubmit}
-              disabled={!!actionLoading || awaitingSigning}
-            >
-              {actionLoading === 'submit' ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Send className="mr-1.5 h-3.5 w-3.5" />
-              )}
-              Skicka in underlag
-            </Button>
-            <Button
-              size="sm"
-              onClick={handleCreateSigningLink}
-              disabled={!!actionLoading || (!underlagSubmitted && !awaitingSigning)}
-              title={!underlagSubmitted && !awaitingSigning ? 'Skicka in underlag först' : ''}
-            >
-              {actionLoading === 'granskning' ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Lock className="mr-1.5 h-3.5 w-3.5" />
-              )}
-              Skapa signeringslänk
-            </Button>
-            {awaitingSigning && (
+          <>
+            {/* Direct AGI submission to Skatteverket is paused while the
+                APIGW subscription is sorted out at SKV's end. Users still
+                generate and download the AGI XML from the salary run page
+                and upload it manually via Mina Sidor. Re-enable the three
+                buttons below once the subscription is in place. */}
+            <div className="rounded-md border border-amber-300 bg-amber-50 p-3 dark:border-amber-900/40 dark:bg-amber-900/20">
+              <p className="text-sm font-medium">
+                Direktinlämning till Skatteverket är pausad
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Ladda ner AGI-filen ovan och lämna in den manuellt via Mina Sidor
+                hos Skatteverket. Direktinlämning aktiveras igen när vår
+                anslutning hos Skatteverket är klar.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
               <Button
                 size="sm"
                 variant="outline"
-                onClick={handleUnlock}
-                disabled={!!actionLoading}
+                onClick={handleSubmit}
+                disabled
+                title="Direktinlämning till Skatteverket är pausad"
               >
-                {actionLoading === 'unlock' ? (
-                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Unlock className="mr-1.5 h-3.5 w-3.5" />
-                )}
-                Lås upp period
+                <Send className="mr-1.5 h-3.5 w-3.5" />
+                Skicka in underlag
               </Button>
-            )}
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={handleCheckSubmitted}
-              disabled={!!actionLoading}
-            >
-              {actionLoading === 'check' ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              ) : (
+              <Button
+                size="sm"
+                onClick={handleCreateSigningLink}
+                disabled
+                title="Direktinlämning till Skatteverket är pausad"
+              >
+                <Lock className="mr-1.5 h-3.5 w-3.5" />
+                Skapa signeringslänk
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={handleCheckSubmitted}
+                disabled
+                title="Direktinlämning till Skatteverket är pausad"
+              >
                 <Download className="mr-1.5 h-3.5 w-3.5" />
-              )}
-              Hämta kvittens
-            </Button>
-          </div>
+                Hämta kvittens
+              </Button>
+            </div>
+          </>
         )}
       </CardContent>
     </Card>

@@ -209,8 +209,39 @@ export async function skvRequest(
   // Handle Skatteverket-specific auth/throttle errors uniformly so callers
   // can catch a single error type rather than parsing status codes inline.
   if (response.status === 401) {
+    // SKV returns 401 for two distinct reasons that need different remedies:
+    //   1. Genuine token expiry / invalid bearer (user must re-auth)
+    //   2. APIGW client lacks subscription for this API (developer portal fix)
+    //      — the bearer is valid but the gateway rejects the call.
+    // Read the body so we can distinguish and surface a useful message.
+    const text = await response.text().catch(() => '')
+    console.error('[skatteverket] 401 from API', { url, body: text })
+
+    // APIGW subscription / client-credential problems: the gateway responds
+    // before the bearer is ever evaluated. The user reconnecting won't help
+    // here — it's an Utvecklarportalen / APIGW configuration issue.
+    const lower = text.toLowerCase()
+    const looksLikeApigwIssue =
+      lower.includes('client_id') ||
+      lower.includes('client id') ||
+      lower.includes('subscription') ||
+      lower.includes('not subscribed') ||
+      lower.includes('apigw') ||
+      lower.includes('api key') ||
+      lower.includes('consumer')
+    if (looksLikeApigwIssue) {
+      throw new SkatteverketAuthError(
+        'Skatteverkets API-gateway nekade anropet. Kontrollera att din ' +
+        'APIGW-klient (SKATTEVERKET_APIGW_CLIENT_ID) har prenumeration på ' +
+        `denna tjänst i Utvecklarportalen. Svar från Skatteverket: ${text || '(tomt svar)'}`,
+        'ACCESS_DENIED'
+      )
+    }
+
     throw new SkatteverketAuthError(
-      'Sessionen har gått ut. Logga in med BankID igen.',
+      text
+        ? `Sessionen har gått ut. Logga in med BankID igen. (Skatteverket: ${text})`
+        : 'Sessionen har gått ut. Logga in med BankID igen.',
       'SESSION_EXPIRED'
     )
   }
