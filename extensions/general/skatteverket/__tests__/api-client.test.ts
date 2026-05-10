@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 // Mock the token-store to bypass DB and supply a fresh access token.
+const deleteTokensMock = vi.fn()
 vi.mock('../lib/token-store', () => ({
   getTokens: vi.fn(async () => ({
     access_token: 'test-access',
@@ -10,7 +11,7 @@ vi.mock('../lib/token-store', () => ({
     scope: 'momsdeklaration',
   })),
   storeTokens: vi.fn(),
-  deleteTokens: vi.fn(),
+  deleteTokens: (...args: unknown[]) => deleteTokensMock(...args),
 }))
 
 // Mock oauth so a refresh attempt (shouldn't fire) is harmless.
@@ -63,6 +64,20 @@ describe('skvRequest — error mapping', () => {
       expect(e).toBeInstanceOf(SkatteverketAuthError)
       expect((e as SkatteverketAuthError).code).toBe('SESSION_EXPIRED')
       expect((e as SkatteverketAuthError).message).toContain('token expired')
+    }
+  })
+
+  it('maps 401 with "Token has been revoked." body → TOKEN_REVOKED and clears local row', async () => {
+    deleteTokensMock.mockClear()
+    mockFetchStatus(401, '{"error":"Token has been revoked."}')
+    try {
+      await skvRequest(fakeSupabase, 'user-1', 'GET', '/x')
+      expect.fail('expected throw')
+    } catch (e) {
+      expect(e).toBeInstanceOf(SkatteverketAuthError)
+      expect((e as SkatteverketAuthError).code).toBe('TOKEN_REVOKED')
+      expect((e as SkatteverketAuthError).message).toMatch(/återkallat/i)
+      expect(deleteTokensMock).toHaveBeenCalledWith(fakeSupabase, 'user-1')
     }
   })
 

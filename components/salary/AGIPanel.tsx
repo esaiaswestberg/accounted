@@ -10,6 +10,7 @@ import {
   Link2Off,
   Loader2,
   Lock,
+  PlugZap,
   Send,
   ShieldAlert,
   Unlock,
@@ -248,6 +249,29 @@ export function AGIPanel(props: AGIPanelProps) {
     kvittensTimers.current.push(setTimeout(poll, 120_000))
     kvittensTimers.current.push(setTimeout(poll, 300_000))
   }, [arbetsgivare, period, fetchSubmission, onChange])
+
+  const handleDisconnect = useCallback(async () => {
+    setActionLoading('disconnect')
+    setError(null)
+    setSuccess(null)
+    try {
+      const res = await fetch('/api/extensions/ext/skatteverket/disconnect', {
+        method: 'POST',
+      })
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}))
+        setError(json.error || `Kunde inte koppla bort (${res.status})`)
+        return
+      }
+      setSuccess('Anslutningen mot Skatteverket har kopplats bort.')
+      await fetchStatus()
+      await fetchSubmission()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Kunde inte koppla bort')
+    } finally {
+      setActionLoading(null)
+    }
+  }, [fetchStatus, fetchSubmission])
 
   const handleConnect = () => {
     // Open the BankID OAuth flow in a centered popup. The callback page
@@ -563,9 +587,27 @@ export function AGIPanel(props: AGIPanelProps) {
       <CardHeader>
         <CardTitle className="flex items-center justify-between text-base">
           <span>Arbetsgivardeklaration (AGI)</span>
-          <span className="flex items-center gap-1 text-xs font-normal text-muted-foreground">
-            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-            Ansluten
+          <span className="flex items-center gap-2 text-xs font-normal text-muted-foreground">
+            <span className="flex items-center gap-1">
+              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+              Ansluten
+            </span>
+            {!readOnly && (
+              <button
+                type="button"
+                onClick={handleDisconnect}
+                disabled={actionLoading === 'disconnect'}
+                className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[11px] font-normal text-muted-foreground transition-colors hover:border-destructive/50 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
+                title="Koppla bort anslutningen mot Skatteverket"
+              >
+                {actionLoading === 'disconnect' ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <PlugZap className="h-3 w-3" />
+                )}
+                Koppla bort
+              </button>
+            )}
           </span>
         </CardTitle>
       </CardHeader>

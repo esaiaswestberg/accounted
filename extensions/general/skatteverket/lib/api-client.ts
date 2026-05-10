@@ -1,7 +1,7 @@
 import crypto from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { refreshAccessToken } from './oauth'
-import { getTokens, storeTokens } from './token-store'
+import { getTokens, storeTokens, deleteTokens } from './token-store'
 import type { SkatteverketTokens } from '../types'
 
 /**
@@ -244,6 +244,7 @@ export async function skvRequest(
       ? ` Headers: ${JSON.stringify(skvHeaders)}`
       : ''
     const bodySuffix = text ? ` Svar: ${text}` : ''
+    const lower = text.toLowerCase()
 
     // OAuth's standard insufficient_scope marker. SKV sometimes emits this
     // as 401 (rather than 403) when the AGI APIGW evaluates scope before
@@ -263,10 +264,33 @@ export async function skvRequest(
       )
     }
 
+    // SKV explicitly declares the token revoked. Body shape observed in
+    // production: { "error": "Token has been revoked." } with a generic
+    // `Bearer realm="OAuth2 Client Realm"` challenge header. This is a
+    // terminal state — the bearer will never come back to life, regardless
+    // of refresh attempts (refresh_token from the same family is also dead).
+    // Auto-clear the local row so /status stops claiming we're connected
+    // and the next interaction forces a clean reconnect. We swallow any
+    // delete error: even if cleanup fails we still want to surface the
+    // primary auth error to the user.
+    if (lower.includes('revoked') || lower.includes('token has been revoked')) {
+      try {
+        await deleteTokens(supabase, userId)
+      } catch (cleanupErr) {
+        console.error('[skatteverket] failed to clear revoked token row', cleanupErr)
+      }
+      throw new SkatteverketAuthError(
+        'Skatteverket har återkallat anslutningen. Detta händer t.ex. om ' +
+        'BankID-sessionen avslutats eller om en ny anslutning gjorts från ' +
+        'en annan enhet. Anslut igen med BankID för att fortsätta.' +
+        headerSuffix + bodySuffix,
+        'TOKEN_REVOKED'
+      )
+    }
+
     // APIGW subscription / client-credential problems: the gateway responds
     // before the bearer is ever evaluated. The user reconnecting won't help
     // here — it's an Utvecklarportalen / APIGW configuration issue.
-    const lower = text.toLowerCase()
     const looksLikeApigwIssue =
       lower.includes('client_id') ||
       lower.includes('client id') ||
@@ -379,6 +403,10 @@ export async function skvRequest(
  *   NOT_CONNECTED      — no tokens stored; user needs to run BankID flow
  *   SESSION_EXPIRED    — 401 from SKV; refresh exhausted or token rejected
  *   REFRESH_EXHAUSTED  — refresh count hit cap (10) before user re-auth
+ *   TOKEN_REVOKED      — 401 with "Token has been revoked." body; SKV killed
+ *                        the bearer (BankID session ended, parallel connect
+ *                        from another device, or auth-code reuse). Local row
+ *                        is auto-cleared; user must reconnect with BankID.
  *   BEHORIGHET_SAKNAS  — 403 with "Behörighet" body; user not authorized
  *                        for this company at SKV (firmatecknare / ombud)
  *   MISSING_SCOPE      — 403 with "invalid_scope" body; the stored token
@@ -396,6 +424,7 @@ export class SkatteverketAuthError extends Error {
       | 'NOT_CONNECTED'
       | 'SESSION_EXPIRED'
       | 'REFRESH_EXHAUSTED'
+      | 'TOKEN_REVOKED'
       | 'BEHORIGHET_SAKNAS'
       | 'MISSING_SCOPE'
       | 'ACCESS_DENIED'

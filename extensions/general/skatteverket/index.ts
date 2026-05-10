@@ -1584,6 +1584,7 @@ function handleSkvError(err: unknown): NextResponse {
       : err.code === 'SESSION_EXPIRED' || err.code === 'REFRESH_EXHAUSTED' ? 401
       : err.code === 'MISSING_SCOPE' ? 401
       : err.code === 'TOKEN_CORRUPTED' ? 401
+      : err.code === 'TOKEN_REVOKED' ? 401
       : 403
 
     return NextResponse.json(
