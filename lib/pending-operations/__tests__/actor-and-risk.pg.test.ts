@@ -66,6 +66,8 @@ describe('pending_operations: actor model + risk columns', () => {
       'run_currency_revaluation', 'explain_voucher_gap', 'uncategorize_transaction',
       'approve_supplier_invoice', 'credit_supplier_invoice',
       'credit_invoice', 'convert_invoice', 'import_sie',
+      // Phase 4: arbitrary-line bookkeeping primitives
+      'create_voucher', 'correct_entry',
     ]
 
     for (const op of expandedTypes) {

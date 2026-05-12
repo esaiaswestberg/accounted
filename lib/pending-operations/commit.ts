@@ -27,7 +27,8 @@ import {
   createInvoiceJournalEntry,
   createCreditNoteJournalEntry,
 } from '@/lib/bookkeeping/invoice-entries'
-import { reverseEntry } from '@/lib/bookkeeping/engine'
+import { createJournalEntry, findFiscalPeriod, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
+import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
 import { closePeriod, lockPeriod, unlockPeriod } from '@/lib/core/bookkeeping/period-service'
 import {
   executeYearEndClosing,
@@ -64,6 +65,8 @@ import type {
   InvoiceItem,
   AccountingMethod,
   CreditNote,
+  CreateJournalEntryLineInput,
+  JournalEntrySourceType,
 } from '@/types'
 
 const log = createLogger('pending-operations/commit')
@@ -1592,6 +1595,171 @@ async function commitImportSie(
   }
 }
 
+// ── Phase 4: arbitrary-line bookkeeping primitives ───────────────
+
+/**
+ * Normalize raw JSON line input from pending_operations.params into the
+ * engine's typed line shape. Trusts shape because the MCP tool already
+ * validates via Zod before staging — defensive coercion only.
+ */
+function normalizeVoucherLines(raw: unknown): CreateJournalEntryLineInput[] {
+  if (!Array.isArray(raw)) return []
+  return raw.map((l) => {
+    const line = l as Record<string, unknown>
+    return {
+      account_number: String(line.account_number),
+      debit_amount: Number(line.debit_amount) || 0,
+      credit_amount: Number(line.credit_amount) || 0,
+      line_description: line.line_description ? String(line.line_description) : undefined,
+      currency: line.currency ? String(line.currency) : undefined,
+      amount_in_currency: line.amount_in_currency !== undefined ? Number(line.amount_in_currency) : undefined,
+      exchange_rate: line.exchange_rate !== undefined ? Number(line.exchange_rate) : undefined,
+      tax_code: line.tax_code ? String(line.tax_code) : undefined,
+      cost_center: line.cost_center ? String(line.cost_center) : undefined,
+      project: line.project ? String(line.project) : undefined,
+    }
+  })
+}
+
+async function commitCreateVoucher(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const entryDate = params.entry_date as string
+  const description = params.description as string
+  const lines = normalizeVoucherLines(params.lines)
+
+  if (!entryDate || !description || lines.length < 2) {
+    return { error: 'entry_date, description, and at least two lines are required', status: 400 }
+  }
+
+  // Re-validate balance defensively. The MCP tool already checks before
+  // staging, but a tampered or hand-inserted pending_operations row would
+  // bypass that gate. createDraftEntry runs the same check internally — this
+  // is for a cleaner 400 + Swedish error before reaching the engine.
+  const balance = validateBalance(lines)
+  if (!balance.valid) {
+    return {
+      error: `Verifikationen balanserar inte: debet ${balance.totalDebit} SEK, kredit ${balance.totalCredit} SEK.`,
+      status: 400,
+    }
+  }
+
+  // Resolve fiscal period: prefer explicit, fall back to date lookup so the
+  // caller can post a voucher without first calling list_fiscal_periods.
+  let fiscalPeriodId = params.fiscal_period_id as string | undefined
+  if (!fiscalPeriodId) {
+    const resolved = await findFiscalPeriod(supabase, companyId, entryDate)
+    if (!resolved) {
+      return {
+        error: `Ingen öppen räkenskapsperiod täcker datumet ${entryDate}. Öppna en period eller välj ett annat datum.`,
+        status: 400,
+      }
+    }
+    fiscalPeriodId = resolved
+  }
+
+  try {
+    const entry = await createJournalEntry(
+      supabase,
+      companyId,
+      userId,
+      {
+        fiscal_period_id: fiscalPeriodId,
+        entry_date: entryDate,
+        description,
+        // source_type is hardcoded — never trust params.source_type. The MCP
+        // tool stages 'manual', but a future direct-staging path could
+        // otherwise inject 'bank'/'invoice'/etc. and corrupt audit attribution.
+        source_type: 'manual' as JournalEntrySourceType,
+        voucher_series: (params.voucher_series as string) || undefined,
+        notes: (params.notes as string) || undefined,
+        lines,
+      },
+      'mcp_create_voucher'
+    )
+
+    return {
+      data: {
+        journal_entry_id: entry.id,
+        voucher_number: entry.voucher_number,
+        voucher_series: entry.voucher_series,
+        fiscal_period_id: fiscalPeriodId,
+      },
+    }
+  } catch (err) {
+    if (isBookkeepingError(err)) throw err
+    return { error: err instanceof Error ? err.message : 'Failed to create voucher', status: 500 }
+  }
+}
+
+async function commitCorrectEntry(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const entryId = params.entry_id as string
+  const lines = normalizeVoucherLines(params.lines)
+
+  if (!entryId || lines.length < 2) {
+    return { error: 'entry_id and at least two lines are required', status: 400 }
+  }
+
+  // Pre-flight: verify the original is posted and its period is not locked.
+  // Falling into correctEntry without this returns a less helpful DB error and
+  // half-creates the storno before rolling back; surfacing the Swedish message
+  // here matches the period_locked UX everywhere else in the app.
+  const { data: original, error: origErr } = await supabase
+    .from('journal_entries')
+    .select('id, status, fiscal_period_id, fiscal_periods!inner(is_closed)')
+    .eq('id', entryId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+
+  if (origErr || !original) {
+    return { error: 'Verifikationen hittades inte.', status: 404 }
+  }
+  if (original.status !== 'posted') {
+    return {
+      error: `Endast bokförda verifikationer kan rättas. Aktuell status: ${original.status}. Drafts redigeras direkt.`,
+      status: 409,
+    }
+  }
+  const period = original.fiscal_periods as { is_closed?: boolean } | { is_closed?: boolean }[] | null
+  const periodClosed = Array.isArray(period) ? period[0]?.is_closed : period?.is_closed
+  if (periodClosed) {
+    return {
+      error: 'Räkenskapsperioden är låst. Öppna perioden eller använd omprövning för redan inlämnade momsdeklarationer.',
+      status: 409,
+    }
+  }
+
+  try {
+    // correctEntry() posts both the storno and the corrected entry into the
+    // SAME fiscal_period_id and entry_date as the original (see
+    // lib/core/bookkeeping/storno-service.ts:99,102,195,198). So a rättelse
+    // made in May 2026 for a December 2025 voucher correctly lands in 2025,
+    // keeping that period's balances consistent. The is_closed pre-flight
+    // above is what blocks corrections to already-locked periods.
+    const result = await correctEntry(supabase, companyId, userId, entryId, lines)
+    return {
+      data: {
+        original_entry_id: entryId,
+        storno_entry_id: result.reversal.id,
+        corrected_entry_id: result.corrected.id,
+        storno_voucher_number: result.reversal.voucher_number,
+        corrected_voucher_number: result.corrected.voucher_number,
+      },
+    }
+  } catch (err) {
+    if (isBookkeepingError(err)) throw err
+    return { error: err instanceof Error ? err.message : 'Failed to correct entry', status: 500 }
+  }
+}
+
 // ── Public dispatcher ────────────────────────────────────────────
 
 /**
@@ -1702,6 +1870,12 @@ export async function commitPendingOperation(
         break
       case 'import_sie':
         result = await commitImportSie(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'create_voucher':
+        result = await commitCreateVoucher(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'correct_entry':
+        result = await commitCorrectEntry(supabase, userId, companyId, pendingOp.params)
         break
       default:
         return {

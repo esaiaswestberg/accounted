@@ -53,4 +53,14 @@ describe('risk-tiers', () => {
     expect(isHighRisk('create_customer')).toBe(false)
     expect(isHighRisk('categorize_transaction')).toBe(false)
   })
+
+  // Phase 4: arbitrary-line bookkeeping primitives. These accept any account
+  // and any amount from the caller, so they're HIGH despite being structurally
+  // similar to uncategorize_transaction (which is medium).
+  it('treats arbitrary-line voucher primitives as high risk', () => {
+    expect(getRiskLevel('create_voucher')).toBe('high')
+    expect(getRiskLevel('correct_entry')).toBe('high')
+    expect(isHighRisk('create_voucher')).toBe(true)
+    expect(isHighRisk('correct_entry')).toBe(true)
+  })
 })

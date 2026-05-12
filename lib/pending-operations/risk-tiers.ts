@@ -57,6 +57,13 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   create_supplier_invoice_from_inbox: 'medium',
   credit_invoice: 'high',
   convert_invoice: 'medium',
+
+  // ── Phase 4: arbitrary-line bookkeeping primitives ─────────────────
+  // Both accept caller-supplied account/amount/period — unlike
+  // uncategorize_transaction (medium), which mirrors an existing entry.
+  // The arbitrary-line capability is what makes these compliance-critical.
+  create_voucher: 'high',
+  correct_entry: 'high',
 }
 
 export function getRiskLevel(operationType: string): RiskLevel {

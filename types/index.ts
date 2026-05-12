@@ -1333,6 +1333,9 @@ export type PendingOperationType =
   // Stream 1 Phase 1: invoice operations beyond simple create/send
   | 'credit_invoice'
   | 'convert_invoice'
+  // Phase 4: arbitrary-line bookkeeping primitives
+  | 'create_voucher'
+  | 'correct_entry'
 export type PendingOperationStatus = 'pending' | 'committing' | 'committed' | 'rejected'
 
 export type PendingOperationActorType = 'user' | 'api_key' | 'mcp_oauth' | 'cron'

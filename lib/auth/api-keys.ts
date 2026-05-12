@@ -121,6 +121,9 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // Invoice conversion + crediting
   gnubok_convert_invoice:                 'invoices:write',
   gnubok_credit_invoice:                  'invoices:write',
+  // Phase 4: arbitrary-line bookkeeping primitives (high-risk, always staged)
+  gnubok_create_voucher:                  'bookkeeping:write',
+  gnubok_correct_entry:                   'bookkeeping:write',
 }
 
 export function validateScopes(scopes: unknown): ApiKeyScope[] | null {
