@@ -15,4 +15,10 @@
 import '@/app/api/v1/health/route'
 import '@/app/api/v1/companies/route'
 
+// Phase 2 PR-A — invoice + customer reads.
+import '@/app/api/v1/companies/[companyId]/invoices/route'
+import '@/app/api/v1/companies/[companyId]/invoices/[id]/route'
+import '@/app/api/v1/companies/[companyId]/customers/route'
+import '@/app/api/v1/companies/[companyId]/customers/[id]/route'
+
 export {}

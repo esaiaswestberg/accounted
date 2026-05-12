@@ -27,6 +27,13 @@ export interface ResponseMeta {
   api_version: string
   next_cursor?: string
   audit?: AuditBlock
+  /**
+   * Names of `?expand=` keys whose underlying data fetch failed during a
+   * soft-degraded response. Present only when at least one expansion was
+   * requested AND failed. Agents that need transactional guarantees can
+   * detect a degraded response without parsing the body.
+   */
+  partial_expansions?: string[]
 }
 
 interface ResponseOptions {
@@ -36,6 +43,8 @@ interface ResponseOptions {
   audit?: AuditBlock
   /** Cursor for the *next* page; omitted when this is the last page. */
   nextCursor?: string
+  /** Names of `?expand=` keys whose data fetch failed (soft-degrade). */
+  partialExpansions?: string[]
   /** Marks the response as a replay of a previously-cached idempotent call. */
   idempotentReplay?: boolean
   /** Marks the response as a dry-run preview rather than a committed write. */
@@ -71,6 +80,9 @@ function buildMeta(opts: ResponseOptions): ResponseMeta {
   }
   if (opts.nextCursor) meta.next_cursor = opts.nextCursor
   if (opts.audit) meta.audit = opts.audit
+  if (opts.partialExpansions && opts.partialExpansions.length > 0) {
+    meta.partial_expansions = opts.partialExpansions
+  }
   return meta
 }
 
