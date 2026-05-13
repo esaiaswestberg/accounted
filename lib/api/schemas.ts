@@ -400,6 +400,7 @@ export const UpdateSettingsSchema = z.object({
   invoice_show_plusgiro: z.boolean().optional(),
   invoice_show_logo: z.boolean().optional(),
   invoice_show_company_name: z.boolean().optional(),
+  invoice_company_name_position: z.enum(['header', 'footer']).optional(),
   invoice_late_fee_text: z.string().nullable().optional(),
   invoice_credit_terms_text: z.string().nullable().optional(),
   // AI agent flow

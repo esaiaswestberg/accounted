@@ -377,9 +377,10 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             {company.logo_url && (company.invoice_show_logo ?? true) && (
               <Image src={company.logo_url} style={{ maxHeight: 40, maxWidth: 150, marginBottom: 6, alignSelf: 'flex-start' }} />
             )}
-            {(company.invoice_show_company_name ?? true) && (
-              <Text style={styles.companyName}>{company.company_name}</Text>
-            )}
+            {(company.invoice_show_company_name ?? true) &&
+              (company.invoice_company_name_position ?? 'header') === 'header' && (
+                <Text style={styles.companyName}>{company.company_name}</Text>
+              )}
           </View>
           <View style={{ textAlign: 'right' }}>
             <Text style={[styles.title, isCreditNote ? styles.creditNoteTitle : {}]}>
@@ -667,6 +668,10 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
         <View style={styles.footer}>
           <Text style={styles.footerText}>
             {[
+              (company.invoice_show_company_name ?? true) &&
+              (company.invoice_company_name_position ?? 'header') === 'footer'
+                ? company.company_name
+                : null,
               company.address_line1,
               (company.postal_code || company.city) ? `${company.postal_code ?? ''} ${company.city ?? ''}`.trim() : null,
               company.org_number ? `Org.nr: ${formatOrgNumber(company.org_number)}` : null,

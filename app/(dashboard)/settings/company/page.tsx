@@ -1,5 +1,6 @@
 'use client'
 
+import { useRouter } from 'next/navigation'
 import { CompanyDangerZone } from '@/components/settings/CompanyDangerZone'
 import { CompanyInfoForm } from '@/components/settings/CompanyInfoForm'
 import { CompanyMembersSection } from '@/components/settings/CompanyMembersSection'
@@ -11,6 +12,7 @@ import { useSettings } from '@/components/settings/useSettings'
 import type { CompanySettings } from '@/types'
 
 export default function CompanySettingsPage() {
+  const router = useRouter()
   const { settings, isLoading, updateSettings } = useSettings()
 
   if (isLoading || !settings) return <SettingsLoadingSkeleton />
@@ -30,6 +32,11 @@ export default function CompanySettingsPage() {
       updates,
       onSuccess: (data: Record<string, unknown>) => {
         updateSettings(data as Partial<CompanySettings>)
+        // Refresh server components so the company switcher and DashboardNav
+        // pick up the new company_name (rendered from server in the dashboard layout).
+        if ('company_name' in updates) {
+          router.refresh()
+        }
       },
     }
   }

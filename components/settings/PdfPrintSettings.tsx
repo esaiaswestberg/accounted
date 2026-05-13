@@ -31,6 +31,20 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
     }
   }, [onUpdate, toast])
 
+  const savePosition = useCallback(async (value: 'header' | 'footer') => {
+    try {
+      const response = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invoice_company_name_position: value }),
+      })
+      if (!response.ok) throw new Error()
+      onUpdate({ invoice_company_name_position: value })
+    } catch {
+      toast({ title: 'Kunde inte spara', variant: 'destructive' })
+    }
+  }, [onUpdate, toast])
+
   const saveText = useCallback(async (field: string, value: string) => {
     try {
       const response = await fetch('/api/settings', {
@@ -107,15 +121,47 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
           />
         </div>
 
-        <div className="flex items-center justify-between">
-          <div>
-            <Label>Visa företagsnamn i faktura</Label>
-            <p className="text-xs text-muted-foreground">Visa företagsnamn under loggan i fakturahuvudet</p>
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <Label>Visa företagsnamn i faktura</Label>
+              <p className="text-xs text-muted-foreground">Visa företagsnamn i fakturan</p>
+            </div>
+            <Switch
+              checked={settings.invoice_show_company_name ?? true}
+              onCheckedChange={(v) => saveToggle('invoice_show_company_name', v)}
+            />
           </div>
-          <Switch
-            checked={settings.invoice_show_company_name ?? true}
-            onCheckedChange={(v) => saveToggle('invoice_show_company_name', v)}
-          />
+          {(settings.invoice_show_company_name ?? true) && (
+            <div className="flex items-center justify-between pl-0">
+              <p className="text-xs text-muted-foreground">Placering</p>
+              <div
+                role="group"
+                aria-label="Placering av företagsnamn"
+                className="inline-flex rounded-md border border-border/60 p-0.5"
+              >
+                {(['header', 'footer'] as const).map((pos) => {
+                  const active = (settings.invoice_company_name_position ?? 'header') === pos
+                  return (
+                    <button
+                      key={pos}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() => savePosition(pos)}
+                      className={
+                        'h-10 px-4 text-sm rounded-sm transition-colors ' +
+                        (active
+                          ? 'bg-muted text-foreground'
+                          : 'text-muted-foreground hover:text-foreground')
+                      }
+                    >
+                      {pos === 'header' ? 'Huvud' : 'Sidfot'}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
