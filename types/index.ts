@@ -929,6 +929,7 @@ export type JournalEntrySourceType =
   | 'correction'
   | 'import'
   | 'system'
+  | 'inbox_item'
   | 'supplier_invoice_registered'
   | 'supplier_invoice_paid'
   | 'supplier_invoice_cash_payment'
@@ -1716,6 +1717,8 @@ export interface InvoiceInboxItem {
   extracted_data: Record<string, unknown> | null
   matched_supplier_id: string | null
   created_supplier_invoice_id: string | null
+  matched_transaction_id: string | null
+  created_journal_entry_id: string | null
   error_message: string | null
   raw_email_payload: Record<string, unknown> | null
 

@@ -38,6 +38,9 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
+import BookDirectlyDialog from '@/components/extensions/general/BookDirectlyDialog'
+
+type AccountingMethod = 'accrual' | 'cash'
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -54,6 +57,7 @@ interface InboxItem {
   matched_supplier_id: string | null
   matched_transaction_id: string | null
   created_supplier_invoice_id: string | null
+  created_journal_entry_id: string | null
   error_message: string | null
   // Set client-side only while a manual upload is in flight. Replaced by a
   // real server-side row once the AI extraction completes.
@@ -147,6 +151,11 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const [isRotating, setIsRotating] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
   const [attachOpen, setAttachOpen] = useState(false)
+  const [bookDirectOpen, setBookDirectOpen] = useState(false)
+  // Cash method users see "Bokför direkt" as the primary CTA; accrual users
+  // see "Skapa leverantörsfaktura". Defaults to 'accrual' until we've read
+  // the company settings so we don't flicker the CTA order on first paint.
+  const [accountingMethod, setAccountingMethod] = useState<AccountingMethod>('accrual')
 
   // ── Data loading ───────────────────────────────────────────
 
@@ -177,6 +186,16 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   useEffect(() => {
     fetchItems()
     fetchInboxAddress()
+    // Resolve the company's bookkeeping method — drives CTA hierarchy.
+    fetch('/api/settings')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => {
+        const method = body?.data?.accounting_method
+        if (method === 'cash' || method === 'accrual') {
+          setAccountingMethod(method)
+        }
+      })
+      .catch(() => { /* keep 'accrual' default */ })
   }, [fetchItems, fetchInboxAddress])
 
   // Read the onboarding-dismissed flag from localStorage after mount
@@ -207,7 +226,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const hasInboxAddress = !!inboxAddress
   const hasAnyItem = items.length > 0
   const hasResolvedItem = items.some(
-    (it) => !!it.created_supplier_invoice_id || !!it.matched_transaction_id
+    (it) =>
+      !!it.created_supplier_invoice_id ||
+      !!it.matched_transaction_id ||
+      !!it.created_journal_entry_id
   )
   const showOnboarding =
     !onboardingDismissed && !(hasInboxAddress && hasAnyItem && hasResolvedItem)
@@ -219,7 +241,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     return items.filter((item) => {
       // Status filter
       const isErr = item.status === 'error'
-      const isDone = !!item.created_supplier_invoice_id || !!item.matched_transaction_id
+      const isDone =
+        !!item.created_supplier_invoice_id ||
+        !!item.matched_transaction_id ||
+        !!item.created_journal_entry_id
       const needsAction = !isErr && !isDone
       if (filter === 'error' && !isErr) return false
       if (filter === 'done' && !isDone) return false
@@ -302,6 +327,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       matched_supplier_id: null,
       matched_transaction_id: null,
       created_supplier_invoice_id: null,
+      created_journal_entry_id: null,
       error_message: null,
       isPlaceholder: true,
       fileName: file.name,
@@ -423,7 +449,9 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 
     // Skip items that the server would 409 on, surface the count to the user.
     const targets = items.filter((it) => selectedIds.has(it.id))
-    const deletable = targets.filter((it) => !it.created_supplier_invoice_id)
+    const deletable = targets.filter(
+      (it) => !it.created_supplier_invoice_id && !it.created_journal_entry_id
+    )
     const skipped = targets.length - deletable.length
 
     setIsBulkDeleting(true)
@@ -770,8 +798,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           {selected ? (
             <FieldsRail
               item={selected}
+              accountingMethod={accountingMethod}
               onDelete={() => handleDelete(selected.id)}
               onAttach={() => setAttachOpen(true)}
+              onBookDirect={() => setBookDirectOpen(true)}
               isDeleting={isDeleting}
               onRetryRequested={async () => {
                 await Promise.all([fetchItems(), handleSelect(selected.id)])
@@ -822,6 +852,16 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               </ToastAction>
             ),
           })
+        }}
+      />
+    )}
+    {selected && (
+      <BookDirectlyDialog
+        open={bookDirectOpen}
+        onOpenChange={setBookDirectOpen}
+        item={selected}
+        onSuccess={async () => {
+          await Promise.all([fetchItems(), handleSelect(selected.id)])
         }}
       />
     )}
@@ -1551,15 +1591,19 @@ function EmptyPreview({
 
 function FieldsRail({
   item,
+  accountingMethod,
   onDelete,
   onAttach,
+  onBookDirect,
   isDeleting,
   onFieldsUpdated,
   onRetryRequested,
 }: {
   item: InboxItem
+  accountingMethod: AccountingMethod
   onDelete: () => void
   onAttach: () => void
+  onBookDirect: () => void
   isDeleting: boolean
   onFieldsUpdated: (data: InvoiceExtractionResult) => void
   onRetryRequested: () => Promise<void>
@@ -1567,8 +1611,10 @@ function FieldsRail({
   const { toast } = useToast()
   const data = item.extracted_data
   const isProcessed = !!item.created_supplier_invoice_id
-  const isLinkedToTransaction = !isProcessed && !!item.matched_transaction_id
-  const isResolved = isProcessed || isLinkedToTransaction
+  const isBookedDirectly = !isProcessed && !!item.created_journal_entry_id
+  const isLinkedToTransaction =
+    !isProcessed && !isBookedDirectly && !!item.matched_transaction_id
+  const isResolved = isProcessed || isBookedDirectly || isLinkedToTransaction
   const [isRetrying, setIsRetrying] = useState(false)
   const [isCreatingSupplier, setIsCreatingSupplier] = useState(false)
 
@@ -1780,6 +1826,13 @@ function FieldsRail({
               Öppna leverantörsfaktura
             </Button>
           </Link>
+        ) : isBookedDirectly && item.created_journal_entry_id ? (
+          <Link href={`/bookkeeping/${item.created_journal_entry_id}`} className="block">
+            <Button variant="default" size="sm" className="w-full">
+              <ArrowRight className="h-3.5 w-3.5 mr-1.5" />
+              Öppna verifikation
+            </Button>
+          </Link>
         ) : isLinkedToTransaction && item.matched_transaction_id ? (
           <Link href={`/transactions?highlight=${item.matched_transaction_id}`} className="block">
             <Button variant="default" size="sm" className="w-full">
@@ -1787,6 +1840,33 @@ function FieldsRail({
               Bokför transaktionen
             </Button>
           </Link>
+        ) : accountingMethod === 'cash' ? (
+          <>
+            <Button
+              variant="default"
+              size="sm"
+              className="w-full"
+              onClick={onBookDirect}
+            >
+              Bokför direkt
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full"
+              onClick={onAttach}
+              disabled={!item.document_id}
+              title={!item.document_id ? 'Ingen bilaga att koppla' : undefined}
+            >
+              <Link2 className="h-3.5 w-3.5 mr-1.5" />
+              Koppla till transaktion
+            </Button>
+            <Link href={`/supplier-invoices/new?inbox_item_id=${item.id}`} className="block">
+              <Button variant="ghost" size="sm" className="w-full">
+                Skapa leverantörsfaktura
+              </Button>
+            </Link>
+          </>
         ) : (
           <>
             <Button
@@ -1805,6 +1885,14 @@ function FieldsRail({
                 Skapa leverantörsfaktura
               </Button>
             </Link>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-full"
+              onClick={onBookDirect}
+            >
+              Bokför direkt
+            </Button>
           </>
         )}
         <Button
@@ -1816,9 +1904,11 @@ function FieldsRail({
           title={
             isProcessed
               ? 'Kopplad till leverantörsfaktura — kan inte tas bort'
-              : isLinkedToTransaction
-                ? 'Kopplad till transaktion — koppla loss innan borttagning'
-                : undefined
+              : isBookedDirectly
+                ? 'Bokförd — kan inte tas bort'
+                : isLinkedToTransaction
+                  ? 'Kopplad till transaktion — koppla loss innan borttagning'
+                  : undefined
           }
         >
           {isDeleting ? (
@@ -1832,6 +1922,12 @@ function FieldsRail({
           <Badge variant="secondary" className="w-full justify-center text-[10px]">
             <Check className="h-2.5 w-2.5 mr-1" />
             Bearbetad
+          </Badge>
+        )}
+        {isBookedDirectly && (
+          <Badge variant="secondary" className="w-full justify-center text-[10px]">
+            <Check className="h-2.5 w-2.5 mr-1" />
+            Bokförd
           </Badge>
         )}
         {isLinkedToTransaction && (

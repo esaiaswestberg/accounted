@@ -18,7 +18,10 @@ import {
   composeInboxAddress,
 } from './lib/inbox-provisioning'
 import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
-import { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
+import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
+import { linkToJournalEntry } from '@/lib/core/documents/document-service'
+import { CreateSupplierInvoiceSchema, BookInboxItemDirectlySchema } from '@/lib/api/schemas'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
 import type { InvoiceExtractionResult, InvoiceInboxItem, SupplierInvoice, SupplierInvoiceItem } from '@/types'
@@ -321,6 +324,7 @@ export const invoiceInboxExtension: Extension = {
             id, status, source, created_at, extracted_data,
             matched_supplier_id, document_id, email_from, email_subject,
             email_received_at, error_message, created_supplier_invoice_id,
+            matched_transaction_id, created_journal_entry_id,
             resend_email_id
           `)
           .eq('company_id', ctx.companyId)
@@ -1027,7 +1031,7 @@ export const invoiceInboxExtension: Extension = {
 
         const { data: item } = await ctx.supabase
           .from('invoice_inbox_items')
-          .select('id, created_supplier_invoice_id')
+          .select('id, created_supplier_invoice_id, created_journal_entry_id')
           .eq('id', id)
           .eq('company_id', ctx.companyId)
           .maybeSingle()
@@ -1036,6 +1040,12 @@ export const invoiceInboxExtension: Extension = {
         if (item.created_supplier_invoice_id) {
           return NextResponse.json(
             { error: 'Posten är kopplad till en leverantörsfaktura och kan inte tas bort.' },
+            { status: 409 }
+          )
+        }
+        if (item.created_journal_entry_id) {
+          return NextResponse.json(
+            { error: 'Posten är bokförd och kan inte tas bort.' },
             { status: 409 }
           )
         }
@@ -1249,6 +1259,172 @@ export const invoiceInboxExtension: Extension = {
             items: itemInserts,
             registration_journal_entry_id: registrationJournalEntryId,
             inbox_item_id: id,
+          },
+        })
+      },
+    },
+
+    // ── Book inbox item directly as a manual journal entry ─
+    // For kontantmetoden users (and ad-hoc receipts) — bypasses the
+    // supplier-invoice flow entirely. Optionally links to a bank
+    // transaction; otherwise produces a standalone verifikation
+    // (e.g. private outlay, cash receipt). The source document is
+    // attached to the new entry per BFL 5 kap. 6§.
+    {
+      method: 'POST',
+      path: '/items/:id/book-direct',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+        const url = new URL(request.url)
+        const id = url.searchParams.get('_id')
+        if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
+
+        let body: z.infer<typeof BookInboxItemDirectlySchema>
+        try {
+          const json = await request.json()
+          body = BookInboxItemDirectlySchema.parse(json)
+        } catch (err) {
+          return NextResponse.json(
+            { error: err instanceof Error ? err.message : 'Invalid request body' },
+            { status: 400 }
+          )
+        }
+
+        const { data: item, error: fetchError } = await ctx.supabase
+          .from('invoice_inbox_items')
+          .select('id, document_id, status, created_supplier_invoice_id, created_journal_entry_id, matched_transaction_id, correlation_id')
+          .eq('id', id)
+          .eq('company_id', ctx.companyId)
+          .maybeSingle()
+
+        if (fetchError) {
+          // Surface the real DB error instead of masking as 404. Common cause:
+          // the migration adding `created_journal_entry_id` hasn't been
+          // applied to this database (e.g. local dev DB lagging staging).
+          console.error('[invoice-inbox/book-direct] Item lookup failed:', fetchError)
+          return NextResponse.json(
+            { error: `Kunde inte slå upp posten: ${fetchError.message}` },
+            { status: 500 }
+          )
+        }
+        if (!item) {
+          return NextResponse.json({ error: 'Inbox item not found' }, { status: 404 })
+        }
+        if (item.created_supplier_invoice_id) {
+          return NextResponse.json(
+            { error: 'Posten är redan kopplad till en leverantörsfaktura.' },
+            { status: 409 }
+          )
+        }
+        if (item.created_journal_entry_id) {
+          return NextResponse.json(
+            { error: 'Posten är redan bokförd.' },
+            { status: 409 }
+          )
+        }
+
+        // If a transaction is provided, validate it before booking.
+        let transaction: { id: string; journal_entry_id: string | null } | null = null
+        if (body.transaction_id) {
+          const { data: tx, error: txError } = await ctx.supabase
+            .from('transactions')
+            .select('id, journal_entry_id')
+            .eq('id', body.transaction_id)
+            .eq('company_id', ctx.companyId)
+            .maybeSingle()
+          if (txError || !tx) {
+            return NextResponse.json({ error: 'Transaktion hittades inte' }, { status: 404 })
+          }
+          if (tx.journal_entry_id) {
+            return NextResponse.json(
+              { error: 'Transaktionen är redan bokförd' },
+              { status: 409 }
+            )
+          }
+          transaction = tx
+        }
+
+        // Create the journal entry via the engine. Source-tracks back to
+        // the inbox item so the audit trail is preserved even when no
+        // transaction is involved.
+        let journalEntry
+        try {
+          journalEntry = await createJournalEntry(ctx.supabase, ctx.companyId, ctx.userId, {
+            fiscal_period_id: body.fiscal_period_id,
+            entry_date: body.entry_date,
+            description: body.description,
+            source_type: transaction ? 'bank_transaction' : 'inbox_item',
+            source_id: transaction ? transaction.id : item.id,
+            notes: body.notes,
+            lines: body.lines,
+          })
+        } catch (err) {
+          const typed = bookkeepingErrorResponse(err)
+          if (typed) return typed
+          return NextResponse.json(
+            { error: err instanceof Error ? err.message : 'Kunde inte skapa verifikation' },
+            { status: 400 }
+          )
+        }
+
+        // Link the source document to the new entry. Best-effort — the
+        // entry itself is already posted; surfacing the failure shouldn't
+        // roll it back, but log so support can re-link manually.
+        if (item.document_id) {
+          try {
+            await linkToJournalEntry(
+              ctx.supabase,
+              ctx.companyId,
+              item.document_id,
+              journalEntry.id
+            )
+          } catch (err) {
+            console.error('[invoice-inbox/book-direct] Document link failed:', err)
+          }
+        }
+
+        // If transaction-linked, mark the transaction as booked.
+        if (transaction) {
+          const { error: txUpdateError } = await ctx.supabase
+            .from('transactions')
+            .update({
+              journal_entry_id: journalEntry.id,
+              is_business: true,
+              category: 'uncategorized',
+            })
+            .eq('id', transaction.id)
+            .eq('company_id', ctx.companyId)
+          if (txUpdateError) {
+            console.error('[invoice-inbox/book-direct] Transaction link failed:', txUpdateError)
+          }
+        }
+
+        // Mark the inbox item as resolved by writing the FK. The status
+        // column is intentionally left at 'received' — terminal state is
+        // encoded via created_journal_entry_id / matched_transaction_id
+        // (see migration 20260504180000_invoice_inbox_remove_ai_columns).
+        const { error: updateError } = await ctx.supabase
+          .from('invoice_inbox_items')
+          .update({
+            created_journal_entry_id: journalEntry.id,
+            matched_transaction_id: transaction?.id ?? null,
+          })
+          .eq('id', id)
+          .eq('company_id', ctx.companyId)
+        if (updateError) {
+          return NextResponse.json({ error: updateError.message }, { status: 500 })
+        }
+
+        // The engine already emits journal_entry.committed — no need to
+        // re-emit. Transaction categorization is implicit: the entry is
+        // already source-linked to the transaction via source_type.
+
+        return NextResponse.json({
+          data: {
+            journal_entry: journalEntry,
+            inbox_item_id: id,
+            transaction_id: transaction?.id ?? null,
           },
         })
       },

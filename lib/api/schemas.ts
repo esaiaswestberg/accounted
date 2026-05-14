@@ -95,6 +95,7 @@ export const JournalEntrySourceTypeSchema = z.enum([
   'correction',
   'import',
   'system',
+  'inbox_item',
   'supplier_invoice_registered',
   'supplier_invoice_paid',
   'supplier_invoice_cash_payment',
@@ -343,6 +344,15 @@ export const BookTransactionSchema = z.object({
   entry_date: isoDate,
   description: z.string().min(1, 'Description is required'),
   lines: z.array(CreateJournalEntryLineSchema).min(1, 'At least one line is required'),
+})
+
+export const BookInboxItemDirectlySchema = z.object({
+  fiscal_period_id: uuid,
+  entry_date: isoDate,
+  description: z.string().min(1, 'Beskrivning krävs'),
+  notes: z.string().max(2000).optional(),
+  lines: z.array(CreateJournalEntryLineSchema).min(2, 'Minst två rader krävs för dubbel bokföring'),
+  transaction_id: uuid.optional(),
 })
 
 export const MatchInvoiceSchema = z.object({

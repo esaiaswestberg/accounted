@@ -570,6 +570,8 @@ export function makeInvoiceInboxItem(
     extracted_data: null,
     matched_supplier_id: null,
     created_supplier_invoice_id: null,
+    matched_transaction_id: null,
+    created_journal_entry_id: null,
     error_message: null,
     raw_email_payload: null,
     correlation_id: null,
