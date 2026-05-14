@@ -1370,6 +1370,24 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'AGI kan endast genereras för lönekörningar i status review, approved, paid, booked eller corrected.',
     message_en: 'AGI can only be generated for salary runs in review, approved, paid, booked, or corrected status.',
   },
+  AGI_INCOMPLETE_DATA: {
+    httpStatus: 400,
+    message_sv: 'AGI-data ofullständig — kontrollera att företaget har organisationsnummer, kontaktnamn, telefon och e-post.',
+    message_en: 'AGI data is incomplete — verify the company has org number, contact name, phone, and email.',
+  },
+  COMPANY_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Företaget kunde inte hittas.',
+    message_en: 'Company not found.',
+  },
+  // Phase 5 PR-1 carry-over: distinct error code for the salary-run DELETE
+  // FK-null guard so an operator seeing this in logs knows a journal entry
+  // is at risk, not just a status race.
+  SALARY_RUN_DELETE_HAS_JOURNAL_ENTRY: {
+    httpStatus: 400,
+    message_sv: 'Lönekörningen är kopplad till en verifikation och kan inte raderas (BFL 5 kap räkenskapsinformation).',
+    message_en: 'Salary run is linked to a journal entry and cannot be deleted (BFL 5 kap räkenskapsinformation).',
+  },
 }
 
 const COMPANY: Record<string, StructuredErrorEntry> = {

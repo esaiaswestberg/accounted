@@ -369,10 +369,16 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
       return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
     }
     if (count === 0) {
-      // Race: status transitioned between pre-flight and delete.
-      return v1ErrorResponseFromCode('SALARY_RUN_DELETE_NOT_DRAFT', ctx.log, {
+      // Pre-flight saw status='draft', so a status race is one explanation —
+      // but the more concerning interpretation is that the FK-null guards
+      // tripped (a journal entry has somehow attached to a draft row,
+      // which would be a partial-failure path in PR-2's lifecycle code).
+      // Surface the distinct BFL 5 kap code so an operator seeing this in
+      // logs can immediately look for a misrouted verifikation rather
+      // than chalking it up to concurrency.
+      return v1ErrorResponseFromCode('SALARY_RUN_DELETE_HAS_JOURNAL_ENTRY', ctx.log, {
         requestId: ctx.requestId,
-        details: { reason: 'race' },
+        details: { reason: 'fk_non_null_or_status_race' },
       })
     }
 

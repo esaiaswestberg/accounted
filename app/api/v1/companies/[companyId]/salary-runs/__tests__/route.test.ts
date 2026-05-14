@@ -539,7 +539,10 @@ describe('DELETE /api/v1/companies/:companyId/salary-runs/:id', () => {
 
     expect(res.status).toBe(400)
     const body = await res.json()
-    expect(body.error.code).toBe('SALARY_RUN_DELETE_NOT_DRAFT')
-    expect(body.error.details.reason).toBe('race')
+    // Phase 5 PR-2 swapped this to a distinct BFL 5 kap code so an
+    // operator seeing this in logs immediately knows a verifikation may
+    // be attached, not just that the status raced.
+    expect(body.error.code).toBe('SALARY_RUN_DELETE_HAS_JOURNAL_ENTRY')
+    expect(body.error.details.reason).toBe('fk_non_null_or_status_race')
   })
 })

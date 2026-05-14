@@ -2,7 +2,6 @@
 
 import { useState, useCallback, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
@@ -216,23 +215,14 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
   if (!profile) return null
 
   const isActive = profile.activityStatus !== 'ceased'
+  const registrations = [
+    profile.registration.fTax && 'F-skatt',
+    profile.registration.vat && 'Moms',
+    profile.registration.payroll && 'Arbetsgivare',
+  ].filter((label): label is string => Boolean(label))
 
   return (
     <div className="space-y-6">
-      {/* Status bar */}
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge variant={isActive ? 'success' : 'destructive'}>
-          {isActive ? 'Aktiv' : 'Avregistrerat'}
-        </Badge>
-        {profile.registration.fTax && <Badge variant="outline">F-skatt</Badge>}
-        {profile.registration.vat && <Badge variant="outline">Moms</Badge>}
-        {profile.registration.payroll && <Badge variant="outline">Arbetsgivare</Badge>}
-
-        <span className="ml-auto text-xs text-muted-foreground">
-          Uppdaterad {timeAgo(profile.fetchedAt)}
-        </span>
-      </div>
-
       <div className="grid gap-6 md:grid-cols-2">
         {/* Company info card */}
         <Card>
@@ -243,6 +233,9 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
             </CardTitle>
             <CardDescription>
               {profile.orgNumber} &middot; {profile.legalEntityType}
+              {!isActive && (
+                <span className="ml-2 text-destructive">&middot; Avregistrerat</span>
+              )}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
@@ -266,6 +259,12 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
               <div className="flex items-center gap-2 text-muted-foreground">
                 <Phone className="h-3.5 w-3.5 shrink-0" />
                 <span>{profile.phone}</span>
+              </div>
+            )}
+            {registrations.length > 0 && (
+              <div className="pt-2 border-t">
+                <p className="text-xs font-medium text-muted-foreground mb-1">Registrerat för</p>
+                <p className="text-xs text-muted-foreground">{registrations.join(' · ')}</p>
               </div>
             )}
             {profile.sniCodes.length > 0 && (
@@ -316,6 +315,9 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
                 )}
               </div>
             )}
+            <p className="pt-2 text-xs text-muted-foreground/70">
+              Uppdaterad {timeAgo(profile.fetchedAt)}
+            </p>
           </CardContent>
         </Card>
 

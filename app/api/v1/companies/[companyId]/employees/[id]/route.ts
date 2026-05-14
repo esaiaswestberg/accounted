@@ -309,6 +309,30 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       }
     }
 
+    // Merged-state Växa-stöd check. UpdateEmployeeSchema enforces consistency
+    // when both fields are present in the body, but a caller flipping
+    // `vaxa_stod_eligible: true` ALONE without supplying `vaxa_stod_start`
+    // can bypass schema-level validation if the existing row has no start.
+    // The schema cannot see the existing row; the route can.
+    const mergedVaxaEligible =
+      'vaxa_stod_eligible' in updates
+        ? (updates.vaxa_stod_eligible as boolean)
+        : ((existing as Record<string, unknown>).vaxa_stod_eligible as boolean)
+    const mergedVaxaStart =
+      'vaxa_stod_start' in updates
+        ? (updates.vaxa_stod_start as string | null)
+        : ((existing as Record<string, unknown>).vaxa_stod_start as string | null)
+    if (mergedVaxaEligible && !mergedVaxaStart) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          field: 'vaxa_stod_start',
+          message:
+            'Startdatum för Växa-stöd måste anges när Växa-stöd är aktiverat. Skicka även `vaxa_stod_start` i samma PATCH.',
+        },
+      })
+    }
+
     if (Object.keys(updates).length === 0) {
       // GDPR Art.5(1)(c): no-change PATCH still returns a write-shape, so
       // mask personnummer just like the POST + PATCH success path.

@@ -82,12 +82,19 @@ import '@/app/api/v1/companies/[companyId]/supplier-invoices/[id]/mark-paid/rout
 import '@/app/api/v1/companies/[companyId]/supplier-invoices/[id]/credit/route'
 
 // Phase 5 PR-1 — Payroll registers: employees + salary-runs CRUD.
-// Lifecycle verbs (calculate / approve / mark-paid / book / generate-agi)
-// ship in Phase 5 PR-2 after the internal /calculate orchestration is
-// extracted into a shared lib/salary/run-calculation.ts helper.
 import '@/app/api/v1/companies/[companyId]/employees/route'
 import '@/app/api/v1/companies/[companyId]/employees/[id]/route'
 import '@/app/api/v1/companies/[companyId]/salary-runs/route'
 import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/route'
+
+// Phase 5 PR-2 — Payroll lifecycle verbs. The /calculate orchestration was
+// extracted into lib/salary/run-calculation.ts; the AGI orchestration into
+// lib/salary/agi/generate-declaration.ts. Both the internal dashboard
+// routes and these v1 routes call the same helpers.
+import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/calculate/route'
+import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/approve/route'
+import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/mark-paid/route'
+import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/book/route'
+import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/generate-agi/route'
 
 export {}
