@@ -1388,6 +1388,27 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'Lönekörningen är kopplad till en verifikation och kan inte raderas (BFL 5 kap räkenskapsinformation).',
     message_en: 'Salary run is linked to a journal entry and cannot be deleted (BFL 5 kap räkenskapsinformation).',
   },
+  // Phase 5 PR-3 — additional import error codes.
+  SIE_IMPORT_DUPLICATE: {
+    httpStatus: 409,
+    message_sv: 'Den här SIE-filen har redan importerats.',
+    message_en: 'This SIE file has already been imported.',
+  },
+  BANK_IMPORT_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Bankfilsimporten misslyckades.',
+    message_en: 'Bank file import failed.',
+  },
+  BANK_FILE_FORMAT_UNKNOWN: {
+    httpStatus: 400,
+    message_sv: 'Bankfilens format kunde inte identifieras.',
+    message_en: 'Bank file format could not be identified.',
+  },
+  BANK_IMPORT_DUPLICATE_OTHER_COMPANY: {
+    httpStatus: 409,
+    message_sv: 'Den här filen har redan importerats för ett annat företag av samma användare.',
+    message_en: 'This file has already been imported into another company by this user.',
+  },
 }
 
 const COMPANY: Record<string, StructuredErrorEntry> = {

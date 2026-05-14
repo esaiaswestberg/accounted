@@ -97,4 +97,26 @@ import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/mark-paid/route'
 import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/book/route'
 import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/generate-agi/route'
 
+// Phase 5 PR-3 — Reports + import async. All reports wrap existing
+// lib/reports/* generators. Imports run inline today but record their
+// progress on the `operations` table for consistent polling-shape. KPI,
+// audit-trail, periodisk-sammanstallning, ne-bilaga, and ink2 are deferred
+// to a follow-up PR (different lib-module structures).
+import '@/app/api/v1/companies/[companyId]/reports/trial-balance/route'
+import '@/app/api/v1/companies/[companyId]/reports/balance-sheet/route'
+import '@/app/api/v1/companies/[companyId]/reports/income-statement/route'
+import '@/app/api/v1/companies/[companyId]/reports/general-ledger/route'
+import '@/app/api/v1/companies/[companyId]/reports/journal-register/route'
+import '@/app/api/v1/companies/[companyId]/reports/vat-declaration/route'
+import '@/app/api/v1/companies/[companyId]/reports/monthly-breakdown/route'
+import '@/app/api/v1/companies/[companyId]/reports/ar-ledger/route'
+import '@/app/api/v1/companies/[companyId]/reports/supplier-ledger/route'
+import '@/app/api/v1/companies/[companyId]/reports/continuity-check/route'
+import '@/app/api/v1/companies/[companyId]/reports/salary-journal/route'
+import '@/app/api/v1/companies/[companyId]/reports/avgifter-basis/route'
+import '@/app/api/v1/companies/[companyId]/reports/vacation-liability/route'
+import '@/app/api/v1/companies/[companyId]/reports/sie-export/route'
+import '@/app/api/v1/companies/[companyId]/imports/sie/route'
+import '@/app/api/v1/companies/[companyId]/imports/bank/route'
+
 export {}
