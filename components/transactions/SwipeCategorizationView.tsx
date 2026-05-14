@@ -11,6 +11,7 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { checkExpenseWarnings } from '@/lib/tax/expense-warnings'
 import { getDefaultAccountForCategory, getDefaultVatTreatmentForCategory } from '@/lib/bookkeeping/category-mapping'
 import { getTemplateById, type BookingTemplate } from '@/lib/bookkeeping/booking-templates'
+import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { isLibraryTemplateId } from '@/lib/bookkeeping/template-library'
 import TemplatePicker from './TemplatePicker'
 import JournalEntryPreview from './JournalEntryPreview'
@@ -400,16 +401,33 @@ export default function SwipeCategorizationView({
 
         <div className="flex-1 overflow-auto p-4 space-y-4">
           {/* Transaction summary */}
-          <Card>
-            <CardContent className="pt-4 space-y-1">
-              <p className="font-medium">{currentTransaction.description}</p>
-              <p className="text-sm text-muted-foreground">{formatDate(currentTransaction.date)}</p>
-              <p className="font-display text-2xl font-medium tabular-nums mt-2">
-                {currentTransaction.amount > 0 ? '+' : ''}
-                {formatCurrency(currentTransaction.amount, currentTransaction.currency)}
-              </p>
-            </CardContent>
-          </Card>
+          {(() => {
+            const reviewSekAmount = resolveSekAmount(
+              currentTransaction.amount,
+              currentTransaction.amount_sek,
+              currentTransaction.currency,
+              currentTransaction.exchange_rate
+            )
+            const isForeign = !!(currentTransaction.currency && currentTransaction.currency !== 'SEK')
+            return (
+              <Card>
+                <CardContent className="pt-4 space-y-1">
+                  <p className="font-medium break-all">{currentTransaction.description}</p>
+                  <p className="text-sm text-muted-foreground">{formatDate(currentTransaction.date)}</p>
+                  <p className="font-display text-2xl font-medium tabular-nums mt-2">
+                    {currentTransaction.amount > 0 ? '+' : ''}
+                    {formatCurrency(reviewSekAmount, 'SEK')}
+                  </p>
+                  {isForeign && (
+                    <p className="text-xs text-muted-foreground tabular-nums">
+                      {currentTransaction.amount > 0 ? '+' : ''}
+                      {formatCurrency(currentTransaction.amount, currentTransaction.currency)}
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            )
+          })()}
 
           {/* Selected template or category */}
           <div>
@@ -471,7 +489,12 @@ export default function SwipeCategorizationView({
           {/* Journal entry preview */}
           <JournalEntryPreview
             amount={currentTransaction.amount}
-            currency={currentTransaction.currency}
+            amountSek={resolveSekAmount(
+              currentTransaction.amount,
+              currentTransaction.amount_sek,
+              currentTransaction.currency,
+              currentTransaction.exchange_rate
+            )}
             category={pendingCategory}
             vatTreatment={isLiabilityAccount ? 'none' : vatTreatment}
             accountOverride={accountOverride}

@@ -370,24 +370,6 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
               <span className="text-muted-foreground">Antal rader</span>
               <span>{lines.length}</span>
             </div>
-            {hasForeignCurrency && (
-              <>
-                <div className="border-t pt-2 mt-2 flex justify-between">
-                  <span className="text-muted-foreground">Belopp i utländsk valuta</span>
-                  <span className="tabular-nums font-medium">
-                    {foreignTotal.toLocaleString('sv-SE', { minimumFractionDigits: 2 })} {foreignCurrency}
-                  </span>
-                </div>
-                {foreignExchangeRate && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Omräkningskurs</span>
-                    <span className="tabular-nums">
-                      1 {foreignCurrency} = {foreignExchangeRate.toLocaleString('sv-SE', { minimumFractionDigits: 4, maximumFractionDigits: 4 })} SEK
-                    </span>
-                  </div>
-                )}
-              </>
-            )}
           </CardContent>
         </Card>
 
@@ -412,6 +394,33 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           </CardContent>
         </Card>
       </div>
+
+      {/* Foreign-currency conversion audit chip */}
+      {hasForeignCurrency && foreignCurrency && (
+        <Card>
+          <CardContent className="p-4">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground mb-2">
+              Valutaomräkning
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+              <div className="flex justify-between sm:block">
+                <span className="text-muted-foreground">Kurs</span>
+                <span className="tabular-nums sm:block">
+                  {foreignExchangeRate
+                    ? `1 ${foreignCurrency} = ${foreignExchangeRate.toLocaleString('sv-SE', { minimumFractionDigits: 4, maximumFractionDigits: 4 })} SEK`
+                    : '—'}
+                </span>
+              </div>
+              <div className="flex justify-between sm:block">
+                <span className="text-muted-foreground">Ursprungsbelopp</span>
+                <span className="tabular-nums sm:block">
+                  {foreignTotal.toLocaleString('sv-SE', { minimumFractionDigits: 2 })} {foreignCurrency}
+                </span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Lines table */}
       <Card>

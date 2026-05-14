@@ -28,6 +28,11 @@ vi.mock('@/lib/invoices/invoice-matching', () => ({
   getBestInvoiceMatch: (...args: unknown[]) => mockGetBestInvoiceMatch(...args),
 }))
 
+const mockFetchExchangeRate = vi.fn()
+vi.mock('@/lib/currency/riksbanken', () => ({
+  fetchExchangeRate: (...args: unknown[]) => mockFetchExchangeRate(...args),
+}))
+
 // ---------------------------------------------------------------------------
 // Queue-based Supabase mock
 // ---------------------------------------------------------------------------
@@ -746,6 +751,60 @@ describe('ingestTransactions', () => {
 
     expect(result.duplicates).toBe(2)
     expect(result.imported).toBe(1)
+  })
+
+  // -----------------------------------------------------------------------
+  // FX rate fetching (issue #442)
+  // Each non-SEK transaction must be priced at the rate of its OWN date,
+  // not the import date and not a single batch-level rate.
+  // -----------------------------------------------------------------------
+  it('fetches an exchange rate per unique (currency, date) pair', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const raw1 = makeRaw({ amount: -100, currency: 'USD', date: '2026-05-07', external_id: 'usd-a' })
+    const raw2 = makeRaw({ amount: -50, currency: 'USD', date: '2026-05-08', external_id: 'usd-b' })
+    const raw3 = makeRaw({ amount: -200, currency: 'EUR', date: '2026-05-07', external_id: 'eur-a' })
+    const raw4 = makeRaw({ amount: -300, currency: 'USD', date: '2026-05-07', external_id: 'usd-c' })
+
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({ data: [], error: null }) // unbooked enable_banking map
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // batch external_id dedup
+    enqueue({ data: makeTransaction({ id: 'tx-1' }), error: null })
+    enqueue({ data: makeTransaction({ id: 'tx-2' }), error: null })
+    enqueue({ data: makeTransaction({ id: 'tx-3' }), error: null })
+    enqueue({ data: makeTransaction({ id: 'tx-4' }), error: null })
+
+    mockFetchExchangeRate.mockResolvedValue({ currency: 'USD', rate: 9.2, date: '2026-05-07' })
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw1, raw2, raw3, raw4])
+
+    // 3 unique pairs: USD/2026-05-07, USD/2026-05-08, EUR/2026-05-07.
+    // raw4 reuses USD/2026-05-07 and must NOT trigger an extra fetch.
+    expect(mockFetchExchangeRate).toHaveBeenCalledTimes(3)
+    const pairs = mockFetchExchangeRate.mock.calls.map(([currency, date]) => ({
+      currency,
+      date: (date as Date).toISOString().split('T')[0],
+    }))
+    expect(pairs).toContainEqual({ currency: 'USD', date: '2026-05-07' })
+    expect(pairs).toContainEqual({ currency: 'USD', date: '2026-05-08' })
+    expect(pairs).toContainEqual({ currency: 'EUR', date: '2026-05-07' })
+  })
+
+  it('does not fetch a rate for SEK transactions', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const raw = makeRaw({ amount: -100, currency: 'SEK', date: '2026-05-07' })
+
+    enqueue({ data: [], error: null }) // booked
+    enqueue({ data: [], error: null }) // unbooked
+    enqueue({ data: [], error: null }) // suppliers
+    enqueue({ data: [], error: null }) // dedup
+    enqueue({ data: makeTransaction({ id: 'tx-sek' }), error: null })
+
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+    expect(mockFetchExchangeRate).not.toHaveBeenCalled()
   })
 
   it('continues normally when booked transaction map query fails', async () => {

@@ -469,6 +469,74 @@ describe('buildMappingResultFromTemplate', () => {
 
     expect(result.description).toBe('Drivmedel & Laddning: OKQ8 tankstation')
   })
+
+  // Foreign-currency transactions: the mall must always emit SEK amounts
+  // (issue #442). Previously buildMappingResultFromTemplate used
+  // Math.abs(transaction.amount) — which is in the source currency — to
+  // compute VAT lines, producing a verifikation in mixed currencies.
+  it('emits SEK amounts when transaction currency is USD (issue #442)', () => {
+    const template = getTemplate('it_saas_subscription') // 25% input VAT
+    const tx = makeTransaction({
+      amount: -125,           // -125 USD
+      currency: 'USD',
+      amount_sek: -1250,      // pre-converted to SEK
+      exchange_rate: 10,
+    })
+    const result = buildMappingResultFromTemplate(template, tx, 'enskild_firma')
+
+    // VAT line debit must be 250 SEK (1250 * 0.25 / 1.25), not 25 USD
+    expect(result.vat_lines).toHaveLength(1)
+    expect(result.vat_lines[0].account_number).toBe('2641')
+    expect(result.vat_lines[0].debit_amount).toBe(250)
+  })
+
+  it('falls back to amount * exchange_rate when amount_sek is missing', () => {
+    const template = getTemplate('it_saas_subscription')
+    const tx = makeTransaction({
+      amount: -100,
+      currency: 'EUR',
+      amount_sek: null,
+      exchange_rate: 11.5,
+    })
+    const result = buildMappingResultFromTemplate(template, tx, 'enskild_firma')
+
+    // 100 * 11.5 = 1150 SEK; 1150 * 0.25 / 1.25 = 230 SEK
+    expect(result.vat_lines[0].debit_amount).toBe(230)
+  })
+
+  it('emits SEK amounts for EU reverse-charge on a non-SEK transaction', () => {
+    const template = getTemplate('it_saas_eu')
+    const tx = makeTransaction({
+      amount: -100,
+      currency: 'USD',
+      amount_sek: -1000,
+      exchange_rate: 10,
+    })
+    const result = buildMappingResultFromTemplate(template, tx, 'enskild_firma')
+
+    // Fiktiv-moms pair sized at 25% of 1000 SEK = 250, not 25 USD
+    expect(result.vat_lines).toHaveLength(4)
+    expect(result.vat_lines[0].debit_amount).toBe(250)   // 2645
+    expect(result.vat_lines[1].credit_amount).toBe(250)  // 2614
+    expect(result.vat_lines[2].debit_amount).toBe(1000)  // 4535 basbelopp
+    expect(result.vat_lines[3].credit_amount).toBe(1000) // 4598
+  })
+
+  it('emits SEK amounts for output VAT on non-SEK income', () => {
+    const template = getTemplate('revenue_standard_25')
+    const tx = makeTransaction({
+      amount: 100,
+      currency: 'USD',
+      amount_sek: 1000,
+      exchange_rate: 10,
+    })
+    const result = buildMappingResultFromTemplate(template, tx, 'enskild_firma')
+
+    // Output VAT at 25% on 1000 SEK = 200, not 20 USD
+    expect(result.vat_lines).toHaveLength(1)
+    expect(result.vat_lines[0].account_number).toBe('2611')
+    expect(result.vat_lines[0].credit_amount).toBe(200)
+  })
 })
 
 // ============================================================

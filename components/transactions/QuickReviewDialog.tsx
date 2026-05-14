@@ -9,6 +9,7 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { ArrowUpRight, ArrowDownRight, Check, Paperclip, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react'
 import { getDefaultAccountForCategory } from '@/lib/bookkeeping/category-mapping'
 import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
+import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
 import JournalEntryPreview from './JournalEntryPreview'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
@@ -117,6 +118,15 @@ export default function QuickReviewDialog({
   const isCounterpartyTemplate = !!(counterpartyLinePattern && counterpartyLinePattern.length > 0)
   const isTemplateBooking = !!templateId || isCounterpartyTemplate
   const isLiabilityAccount = accountOverride.startsWith('2')
+  // For non-SEK transactions, the verifikation and the headline must show
+  // the SEK-converted total — the mall/category booking always posts in SEK.
+  const sekAmount = resolveSekAmount(
+    transaction.amount,
+    transaction.amount_sek,
+    transaction.currency,
+    transaction.exchange_rate
+  )
+  const isForeign = !!(transaction.currency && transaction.currency !== 'SEK')
 
   async function handleConfirm() {
     if (!category || !transaction) return
@@ -192,13 +202,21 @@ export default function QuickReviewDialog({
             )}
           </div>
           <div className="flex-1 min-w-0">
-            <p className="font-medium text-sm truncate">{transaction.description}</p>
+            <p className="font-medium text-sm break-all">{transaction.description}</p>
             <p className="text-xs text-muted-foreground">{formatDate(transaction.date)}</p>
           </div>
-          <p className={`font-medium text-sm flex-shrink-0 ${isIncome ? 'text-success' : ''}`}>
-            {isIncome ? '+' : ''}
-            {formatCurrency(transaction.amount, transaction.currency)}
-          </p>
+          <div className="text-right flex-shrink-0">
+            <p className={`font-medium text-sm tabular-nums ${isIncome ? 'text-success' : ''}`}>
+              {isIncome ? '+' : ''}
+              {formatCurrency(sekAmount, 'SEK')}
+            </p>
+            {isForeign && (
+              <p className="text-xs text-muted-foreground tabular-nums">
+                {isIncome ? '+' : ''}
+                {formatCurrency(transaction.amount, transaction.currency)}
+              </p>
+            )}
+          </div>
         </div>
 
         {/* Template or Category */}
@@ -260,7 +278,7 @@ export default function QuickReviewDialog({
         {/* Journal entry preview */}
         <JournalEntryPreview
           amount={transaction.amount}
-          currency={transaction.currency}
+          amountSek={sekAmount}
           {...(isCounterpartyTemplate
             ? { linePattern: counterpartyLinePattern ?? undefined }
             : templateId && template

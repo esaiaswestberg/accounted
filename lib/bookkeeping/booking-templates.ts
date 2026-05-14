@@ -13,6 +13,7 @@ import {
   generateReverseChargeBasisLines,
   generateInputVatLine,
 } from './vat-entries'
+import { resolveSekAmount } from './currency-utils'
 
 // ============================================================
 // Types
@@ -1577,6 +1578,17 @@ export function buildMappingResultFromTemplate(
     if (template.credit_account_ab) creditAccount = template.credit_account_ab
   }
 
+  // Always work in SEK. For non-SEK transactions, resolve the SEK-equivalent
+  // (via amount_sek or amount * exchange_rate); for SEK rows this is a no-op.
+  // Without this, VAT and reverse-charge lines would be emitted in the
+  // original currency and the resulting verifikation would mix currencies.
+  const absAmount = Math.abs(resolveSekAmount(
+    transaction.amount,
+    transaction.amount_sek,
+    transaction.currency,
+    transaction.exchange_rate
+  ))
+
   // Generate VAT lines
   const vatLines: VatJournalLine[] = []
   if (isBusiness && template.vat_treatment && template.deductibility !== 'non_deductible') {
@@ -1588,7 +1600,6 @@ export function buildMappingResultFromTemplate(
       // basbelopp pair populates momsdeklaration rutor 20–24; without it
       // Skatteverket rejects with FK004 ("ruta 30-32 utan motsvarande
       // basbelopp i 20-24" — ML 13 kap kräver båda sidor).
-      const absAmount = Math.abs(transaction.amount)
       const supplierType = template.reverse_charge_supplier_type ?? 'eu_business'
       const isDomestic = supplierType === 'swedish_business'
       const rcRate = 0.25 // fiktiv moms rate; current templates are 25%
@@ -1618,7 +1629,6 @@ export function buildMappingResultFromTemplate(
       }
     } else if (vatRate > 0 && isExpense) {
       // Input VAT deduction
-      const absAmount = Math.abs(transaction.amount)
       const vatLine = generateInputVatLine(absAmount, vatRate)
       if (vatLine) {
         vatLines.push({
@@ -1630,8 +1640,7 @@ export function buildMappingResultFromTemplate(
       }
     } else if (vatRate > 0 && !isExpense) {
       // Output VAT (income)
-      const grossAmount = Math.abs(transaction.amount)
-      const vatAmount = Math.round((grossAmount * vatRate / (1 + vatRate)) * 100) / 100
+      const vatAmount = Math.round((absAmount * vatRate / (1 + vatRate)) * 100) / 100
       let vatAccount: string
       switch (template.vat_treatment) {
         case 'standard_25': vatAccount = '2611'; break

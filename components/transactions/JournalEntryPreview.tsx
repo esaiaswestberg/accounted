@@ -15,7 +15,13 @@ interface PreviewLine {
 
 interface JournalEntryPreviewProps {
   amount: number
-  currency?: string
+  /**
+   * SEK-equivalent of `amount` for foreign-currency transactions. When set,
+   * all line calculations and the displayed totals use this value — the
+   * verifikation must always be in SEK regardless of the source currency.
+   * Falls back to `amount` when omitted (i.e. SEK transactions).
+   */
+  amountSek?: number
   category?: TransactionCategory
   vatTreatment?: VatTreatment | 'none'
   accountOverride?: string
@@ -33,7 +39,7 @@ interface JournalEntryPreviewProps {
 
 export default function JournalEntryPreview({
   amount,
-  currency = 'SEK',
+  amountSek,
   category,
   vatTreatment,
   accountOverride,
@@ -48,7 +54,9 @@ export default function JournalEntryPreview({
 }: JournalEntryPreviewProps) {
   const lines = useMemo(() => {
     const result: PreviewLine[] = []
-    const absAmount = Math.abs(amount)
+    // Use SEK-equivalent when provided; sign comes from `amount` (which
+    // distinguishes income vs expense) but magnitude always comes from SEK.
+    const absAmount = Math.abs(amountSek ?? amount)
 
     // Multi-line counterparty template preview
     if (linePattern && linePattern.length > 0) {
@@ -181,7 +189,7 @@ export default function JournalEntryPreview({
     }
 
     return result
-  }, [amount, category, vatTreatment, accountOverride, entityType, templateDebitAccount, templateCreditAccount, templateVatRate, templateVatTreatment, templateSupplierType, linePattern, settlementAccount])
+  }, [amount, amountSek, category, vatTreatment, accountOverride, entityType, templateDebitAccount, templateCreditAccount, templateVatRate, templateVatTreatment, templateSupplierType, linePattern, settlementAccount])
 
   if (lines.length === 0) return null
 
@@ -195,7 +203,7 @@ export default function JournalEntryPreview({
               {line.side === 'debet' ? 'Debet' : 'Kredit'}
             </span>
             <span className="flex-1 truncate">{formatAccountWithName(line.account)}</span>
-            <span className="flex-shrink-0 tabular-nums">{formatCurrency(line.amount, currency)}</span>
+            <span className="flex-shrink-0 tabular-nums">{formatCurrency(line.amount, 'SEK')}</span>
           </div>
         ))}
       </div>
