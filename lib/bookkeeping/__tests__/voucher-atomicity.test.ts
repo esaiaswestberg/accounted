@@ -6,6 +6,15 @@ vi.mock('@/lib/events', () => ({
   eventBus: { emit: vi.fn().mockResolvedValue([]) },
 }))
 
+vi.mock('@/lib/logger', () => ({
+  createLogger: () => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    child: vi.fn().mockReturnThis(),
+  }),
+}))
+
 import { commitEntry, getNextVoucherNumber, createJournalEntry } from '../engine'
 import { BookkeepingDatabaseError } from '../errors'
 

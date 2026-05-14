@@ -5,8 +5,11 @@ import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { ensureInitialized } from '@/lib/init'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
+import { createLogger } from '@/lib/logger'
 
 ensureInitialized()
+
+const log = createLogger('api.bookkeeping.commit')
 
 export async function POST(
   request: Request,
@@ -26,11 +29,18 @@ export async function POST(
   const companyId = await requireCompanyId(supabase, user.id)
 
   try {
-    const posted = await commitEntry(supabase, companyId, user.id, id, 'manual')
+    const posted = await commitEntry(supabase, companyId, user.id, id, 'user_accept')
     return NextResponse.json({ data: posted })
   } catch (err) {
     const typed = bookkeepingErrorResponse(err)
     if (typed) return typed
+    // Untyped error path: engine logging didn't fire, so log here.
+    log.error('commit endpoint failed (untyped)', err as Error, {
+      companyId,
+      userId: user.id,
+      entityType: 'journal_entry',
+      entityId: id,
+    })
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Failed to commit entry' },
       { status: 400 }

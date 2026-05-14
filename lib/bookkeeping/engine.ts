@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
+import { createLogger } from '@/lib/logger'
 import {
   AccountsNotInChartError,
   BookkeepingDatabaseError,
@@ -16,6 +17,8 @@ import type {
   JournalEntry,
   JournalEntryLine,
 } from '@/types'
+
+const log = createLogger('bookkeeping.engine')
 
 /**
  * Validate that a set of journal entry lines is balanced (debits = credits)
@@ -228,6 +231,17 @@ export async function createDraftEntry(
     .single()
 
   if (entryError || !entry) {
+    log.error('insert journal_entries draft failed', entryError ?? new Error('no row returned'), {
+      operation: 'create_draft_entry',
+      companyId,
+      userId,
+      entityType: 'journal_entry',
+      fiscalPeriodId: input.fiscal_period_id,
+      sourceType: input.source_type,
+      pgCode: (entryError as { code?: string } | null)?.code,
+      pgDetails: (entryError as { details?: string } | null)?.details,
+      pgHint: (entryError as { hint?: string } | null)?.hint,
+    })
     throw new BookkeepingDatabaseError('create_draft_entry', entryError?.message)
   }
 
@@ -239,7 +253,30 @@ export async function createDraftEntry(
     .insert(lineInserts)
 
   if (linesError) {
-    await supabase.from('journal_entries').update({ status: 'cancelled' }).eq('id', entry.id)
+    log.error('insert journal_entry_lines failed', linesError, {
+      operation: 'create_entry_lines',
+      companyId,
+      userId,
+      entityType: 'journal_entry',
+      entityId: entry.id,
+      lineCount: lineInserts.length,
+      pgCode: (linesError as { code?: string }).code,
+      pgDetails: (linesError as { details?: string }).details,
+      pgHint: (linesError as { hint?: string }).hint,
+    })
+    const { error: cancelError } = await supabase
+      .from('journal_entries')
+      .update({ status: 'cancelled' })
+      .eq('id', entry.id)
+    if (cancelError) {
+      log.error('orphan draft cleanup failed (phantom draft remains)', cancelError, {
+        operation: 'create_entry_lines.cleanup',
+        companyId,
+        entityType: 'journal_entry',
+        entityId: entry.id,
+        pgCode: (cancelError as { code?: string }).code,
+      })
+    }
     throw new BookkeepingDatabaseError('create_entry_lines', linesError.message)
   }
 
@@ -285,6 +322,17 @@ export async function commitEntry(
   })
 
   if (commitError) {
+    log.error('commit_journal_entry RPC failed', commitError, {
+      operation: 'commit_entry',
+      companyId,
+      userId,
+      entityType: 'journal_entry',
+      entityId: entryId,
+      commitMethod: commitMethod ?? null,
+      pgCode: (commitError as { code?: string }).code,
+      pgDetails: (commitError as { details?: string }).details,
+      pgHint: (commitError as { hint?: string }).hint,
+    })
     throw new BookkeepingDatabaseError('commit_entry', commitError.message)
   }
 
@@ -331,13 +379,28 @@ export async function createJournalEntry(
     // before failing downstream, immutability trigger blocks draft→cancelled
     // on a posted row anyway — the filter just avoids firing the trigger.
     try {
-      await supabase
+      const { error: cancelError } = await supabase
         .from('journal_entries')
         .update({ status: 'cancelled' })
         .eq('id', draft.id)
         .eq('status', 'draft')
-    } catch {
-      // Swallow rollback failure — surface the original commit error
+      if (cancelError) {
+        log.error('orphan draft cleanup failed (phantom draft remains)', cancelError, {
+          operation: 'create_journal_entry.cleanup',
+          companyId,
+          entityType: 'journal_entry',
+          entityId: draft.id,
+          pgCode: (cancelError as { code?: string }).code,
+        })
+      }
+    } catch (cleanupErr) {
+      // Surface the original commit error, but don't lose the cleanup signal.
+      log.error('orphan draft cleanup threw (phantom draft remains)', cleanupErr as Error, {
+        operation: 'create_journal_entry.cleanup',
+        companyId,
+        entityType: 'journal_entry',
+        entityId: draft.id,
+      })
     }
     throw commitError
   }
