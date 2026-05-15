@@ -39,6 +39,7 @@ import {
 } from '@/lib/bookkeeping/invoice-entries'
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { eventBus } from '@/lib/events'
+import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import type { CreateJournalEntryInput, EntityType, Invoice } from '@/types'
 
 const INVOICE_MARK_PAID_RESPONSE_COLUMNS =
@@ -74,6 +75,7 @@ registerEndpoint({
     'Custom `lines` must balance (sum of debits = sum of credits, both > 0). Otherwise returns 400 INVOICE_PAID_LINES_UNBALANCED.',
     'For foreign-currency invoices, supply `exchange_rate_difference` (SEK delta vs the invoice\'s booked rate) to book the FX adjustment correctly. Omitting it on a non-SEK invoice will mis-book the FX gain/loss.',
     'Cash basis (kontantmetoden) recognizes revenue HERE, not at :mark-sent. The dashboard tracks this via company_settings.accounting_method.',
+    'Duplicate-payment guard: if an unlinked inbound bank transaction looks like this payment, returns 409 INVOICE_PAID_LIKELY_DUPLICATE with candidate transactions. Retry with `force: true` to bypass — but the retry MUST use a fresh Idempotency-Key (the original is body-hash bound; reusing it returns 400 IDEMPOTENCY_KEY_REUSE). The guard is also evaluated under dry-run, so a successful dry-run does not guarantee a successful commit.',
   ],
   example: {
     request: { payment_date: '2026-05-12' },
@@ -143,6 +145,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           line_description?: string
         }[]
       | undefined
+    let force = false
     if (rawBody) {
       const parsed = MarkInvoicePaidSchema.safeParse(rawBody)
       if (!parsed.success) {
@@ -159,6 +162,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       exchangeRateDifference = parsed.data.exchange_rate_difference
       bodyPaymentDate = parsed.data.payment_date
       customLines = parsed.data.lines
+      force = parsed.data.force === true
     }
 
     // Pre-flight: fetch invoice with relations needed for journal entry.
@@ -262,6 +266,44 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const newStatus: 'paid' | 'partially_paid' = newRemaining <= 0.005 ? 'paid' : 'partially_paid'
     const newPaidAmount =
       Math.round(((typed.paid_amount ?? 0) + paymentAmount) * 100) / 100
+
+    // Duplicate-payment guard: surface a likely-matching unlinked inbound
+    // bank transaction before booking (or before dry-run preview, so a
+    // successful dry-run can't mask the warning). Skipped on partial
+    // payments (paymentAmount < remaining is an explicit, deliberate action),
+    // on force=true, and on invoices without a resolved customer name.
+    const remainingForGuard = typed.remaining_amount ?? typed.total
+    const paidRoundedGuard = Math.round(paymentAmount * 100) / 100
+    const remainingRoundedGuard = Math.round(remainingForGuard * 100) / 100
+    if (!force && paidRoundedGuard >= remainingRoundedGuard) {
+      const customerName = typed.customer?.name
+      if (!customerName) {
+        ctx.log.warn('duplicate-payment guard skipped', {
+          reason: 'missing_customer_name',
+          invoiceId,
+        })
+      } else {
+        const candidates = await findDuplicatePaymentCandidatesForInvoice(ctx.supabase, {
+          companyId: ctx.companyId!,
+          invoice: { invoice_number: typed.invoice_number, customer_name: customerName },
+          paymentAmount,
+          paymentDate,
+        })
+        if (candidates.length > 0) {
+          return v1ErrorResponseFromCode('INVOICE_PAID_LIKELY_DUPLICATE', ctx.log, {
+            requestId: ctx.requestId,
+            details: { candidates },
+          })
+        }
+      }
+    } else if (force) {
+      ctx.log.warn('duplicate-payment guard bypassed', {
+        reason: 'force=true',
+        invoiceId,
+        userId: ctx.userId,
+        paymentAmount,
+      })
+    }
 
     if (ctx.dryRun) {
       return dryRunPreview(

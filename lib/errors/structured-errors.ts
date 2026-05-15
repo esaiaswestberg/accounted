@@ -280,6 +280,17 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
         'Match the transaction via POST /api/transactions/{id}/match-supplier-invoice, or resend with confirm_no_match: true to keep the plain 244x categorization.',
     },
   },
+  TX_CATEGORIZE_SUGGEST_CI_MATCH: {
+    httpStatus: 409,
+    message_sv:
+      'Det finns en obetald kundfaktura från samma kund med samma belopp. Matcha mot fakturan istället för att bokföra direkt mot kundfordringskontot — annars skapas en dubblerad verifikation som måste stornas (BFL 5 kap 5 §).',
+    message_en:
+      'An unpaid customer invoice from the same customer matches this amount. Suggest matching to the invoice instead of a plain 151x categorization to avoid producing a duplicate verifikation (BFL 5 kap 5 §).',
+    remediation: {
+      description:
+        'Match the transaction via POST /api/transactions/{id}/match-invoice, or resend with confirm_no_match: true to keep the plain 151x categorization.',
+    },
+  },
   TX_UNCATEGORIZE_NO_LINKED_ENTRY: {
     httpStatus: 400,
     message_sv: 'Transaktionen har ingen kopplad verifikation att stornera.',
@@ -544,6 +555,17 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 500,
     message_sv: 'Kunde inte bokföra betalningen.',
     message_en: 'Failed to create payment journal entry.',
+  },
+  INVOICE_PAID_LIKELY_DUPLICATE: {
+    httpStatus: 409,
+    message_sv:
+      'Det finns redan en obokförd inkommande banktransaktion som kan vara denna betalning. Länka den istället, eller markera som betald ändå om du är säker.',
+    message_en:
+      'A likely-matching unlinked inbound bank transaction was found for this customer. Suggest linking it instead of creating a new payment entry.',
+    remediation: {
+      description:
+        'Match the candidate transaction via POST /api/transactions/{id}/match-invoice, or resend mark-paid with force: true to create the payment entry anyway. When using the v1 endpoint, the force retry requires a fresh Idempotency-Key (the original key is bound to the body hash).',
+    },
   },
   INVOICE_DELETE_NOT_DRAFT: {
     httpStatus: 400,

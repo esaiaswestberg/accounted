@@ -131,6 +131,24 @@ export default function TransactionsPage() {
   } | null>(null)
   const [siMatchProcessing, setSiMatchProcessing] = useState(false)
 
+  // Prong B (customer side): prompt to match against an unpaid customer
+  // invoice instead of categorizing direct to 1510 on an inbound bank tx.
+  // Triggered by a 409 TX_CATEGORIZE_SUGGEST_CI_MATCH.
+  const [ciMatchSuggestion, setCiMatchSuggestion] = useState<{
+    transactionId: string
+    retry: () => Promise<string | null>
+    candidates: Array<{
+      invoice_id: string
+      invoice_number: string | null
+      invoice_date: string
+      remaining_amount: number
+      currency: string
+      customer_name: string | null
+      match_reason: 'ocr_exact' | 'name_amount_fuzzy'
+    }>
+  } | null>(null)
+  const [ciMatchProcessing, setCiMatchProcessing] = useState(false)
+
   // Entity type for tooltip context
   const [entityType, setEntityType] = useState<string>('enskild_firma')
 
@@ -486,6 +504,21 @@ export default function TransactionsPage() {
           setProcessingId(null)
           return null
         }
+        if (
+          result?.error?.code === 'TX_CATEGORIZE_SUGGEST_CI_MATCH' &&
+          Array.isArray(result.error.details?.candidates)
+        ) {
+          // Prong B (customer side): invite the user to match the unpaid
+          // customer invoice instead of booking a plain 1510 categorization
+          // that would later create a duplicate.
+          setCiMatchSuggestion({
+            transactionId: id,
+            retry: () => runCategorize({ ...args, confirmNoMatch: true }),
+            candidates: result.error.details.candidates,
+          })
+          setProcessingId(null)
+          return null
+        }
         toast({
           title: 'Kategorisering misslyckades',
           description: getErrorMessage(result, { context: 'transaction', statusCode: response.status }),
@@ -566,6 +599,55 @@ export default function TransactionsPage() {
 
   async function handleMarkPrivate(id: string) {
     await handleCategorize(id, false, 'private')
+  }
+
+  async function handleMatchSuggestedInvoice(transactionId: string, invoiceId: string) {
+    setCiMatchProcessing(true)
+    try {
+      const response = await fetch(`/api/transactions/${transactionId}/match-invoice`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invoice_id: invoiceId }),
+      })
+      const result = await response.json()
+      if (!response.ok) {
+        toast({
+          title: 'Matchning misslyckades',
+          description: getErrorMessage(result, { context: 'transaction', statusCode: response.status }),
+          variant: 'destructive',
+        })
+        setCiMatchProcessing(false)
+        return
+      }
+
+      toast({ title: 'Kundfaktura matchad', description: 'Fakturan markerades som betald' })
+      setCiMatchSuggestion(null)
+      setExitingIds((prev) => new Set(prev).add(transactionId))
+      setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
+      setTimeout(() => {
+        setTransactions((prev) =>
+          prev.map((t) =>
+            t.id === transactionId
+              ? {
+                  ...t,
+                  invoice_id: invoiceId,
+                  is_business: true,
+                  journal_entry_id: result.journal_entry_id ?? t.journal_entry_id,
+                }
+              : t
+          )
+        )
+        setExitingIds((prev) => {
+          const next = new Set(prev)
+          next.delete(transactionId)
+          return next
+        })
+      }, 350)
+    } catch {
+      toast({ title: 'Matchning misslyckades', description: 'Försök igen.', variant: 'destructive' })
+    } finally {
+      setCiMatchProcessing(false)
+    }
   }
 
   async function handleMatchSuggestedSupplierInvoice(transactionId: string, supplierInvoiceId: string) {
@@ -1488,6 +1570,69 @@ export default function TransactionsPage() {
                 disabled={siMatchProcessing}
               >
                 Bokför på leverantörsskulder ändå
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Prong B (customer side): match-against-customer-invoice suggestion */}
+      <Dialog
+        open={ciMatchSuggestion !== null}
+        onOpenChange={(open) => {
+          if (!open) setCiMatchSuggestion(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Matcha mot kundfaktura?</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Det finns en obetald kundfaktura med samma belopp från samma kund. Matcha mot fakturan
+              istället för att bokföra direkt mot kundfordringskontot, annars skapas en dubblerad
+              verifikation som måste stornas (BFL 5 kap 5 §).
+            </p>
+            <div className="space-y-2 rounded-md border bg-muted/30 p-3">
+              {ciMatchSuggestion?.candidates.map((c) => (
+                <div key={c.invoice_id} className="flex items-center justify-between gap-3 text-sm">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium">
+                        {c.customer_name || 'Kund'} · {c.invoice_number ?? '—'}
+                      </span>
+                      {c.match_reason === 'ocr_exact' && (
+                        <Badge variant="success">Exakt OCR-träff</Badge>
+                      )}
+                    </div>
+                    <div className="text-xs text-muted-foreground tabular-nums">
+                      {formatDate(c.invoice_date)} · kvar {formatCurrency(c.remaining_amount, c.currency)}
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    onClick={() => handleMatchSuggestedInvoice(ciMatchSuggestion.transactionId, c.invoice_id)}
+                    disabled={ciMatchProcessing}
+                  >
+                    Matcha
+                  </Button>
+                </div>
+              ))}
+            </div>
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <Button variant="outline" onClick={() => setCiMatchSuggestion(null)}>
+                Avbryt
+              </Button>
+              <Button
+                variant="outline"
+                onClick={async () => {
+                  const retry = ciMatchSuggestion?.retry
+                  setCiMatchSuggestion(null)
+                  if (retry) await retry()
+                }}
+                disabled={ciMatchProcessing}
+              >
+                Bokför på kundfordringar ändå
               </Button>
             </div>
           </div>

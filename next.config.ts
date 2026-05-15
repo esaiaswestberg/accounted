@@ -27,6 +27,25 @@ const nextConfig: NextConfig = {
         destination: '/kpi',
         permanent: true,
       },
+      // Docs canonicalised to docs.gnubok.se. Every `docs_url` field on the
+      // v1 error envelope still points at this host; the 308 forwards both
+      // humans and agents to the docs subdomain without us needing to
+      // mass-update structured-errors.
+      {
+        source: '/docs/api',
+        destination: 'https://docs.gnubok.se/',
+        permanent: true,
+      },
+      {
+        source: '/docs/api/:path*',
+        destination: 'https://docs.gnubok.se/:path*',
+        permanent: true,
+      },
+      {
+        source: '/llms-full.txt',
+        destination: 'https://docs.gnubok.se/llms-full.txt',
+        permanent: true,
+      },
     ]
   },
   async headers() {

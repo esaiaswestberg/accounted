@@ -13,6 +13,7 @@ import {
   DUPLICATE_AMOUNT_TOLERANCE_PCT,
   DUPLICATE_DATE_WINDOW_DAYS,
   escapeLikePattern,
+  normalizeOcrReference,
 } from '@/lib/invoices/duplicate-payment-guard'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -274,6 +275,13 @@ export const POST = withRouteContext(
         creditAccount: mappingResult.credit_account,
       })
     }
+    if (body.confirm_no_match && /^151\d$/.test(mappingResult.credit_account)) {
+      txLog.warn('customer-invoice match suggestion bypassed', {
+        reason: 'confirm_no_match=true',
+        debitAccount: mappingResult.debit_account,
+        creditAccount: mappingResult.credit_account,
+      })
+    }
 
     // Prong B: intercept plain 244x categorization of supplier payments when
     // an open supplier invoice already covers this amount. Categorizing direct
@@ -344,6 +352,140 @@ export const POST = withRouteContext(
             },
           })
         }
+      }
+    }
+
+    // Prong B (customer side): intercept plain 151x categorization of an
+    // inbound payment when an unpaid customer invoice already covers this
+    // amount. Symmetric with the supplier-side intercept above. The debit
+    // must be a bank/cash account (^19\d{2}$, BAS class 19) — a 1xxx debit
+    // outside class 19 isn't a payment receipt and the suggestion would
+    // misdirect the user.
+    if (
+      !body.confirm_no_match &&
+      is_business &&
+      transaction.amount > 0 &&
+      /^19\d{2}$/.test(mappingResult.debit_account) &&
+      /^151\d$/.test(mappingResult.credit_account)
+    ) {
+      const txAmount = transaction.amount
+      const windowLow = Math.round(txAmount * (1 - DUPLICATE_AMOUNT_TOLERANCE_PCT) * 100) / 100
+      const windowHigh = Math.round(txAmount * (1 + DUPLICATE_AMOUNT_TOLERANCE_PCT) * 100) / 100
+
+      // Resolve candidate customer(s) by name. Inbound bank txs are typically
+      // described by payer name in EITHER merchant_name OR description, so
+      // search both. OCR-direct lookup is below.
+      let customerIds: string[] = []
+      const searchTerms: string[] = []
+      if (transaction.merchant_name) searchTerms.push(transaction.merchant_name)
+      if (transaction.description) searchTerms.push(transaction.description)
+      const collected = new Set<string>()
+      for (const term of searchTerms) {
+        const escaped = escapeLikePattern(term)
+        const { data: matched } = await supabase
+          .from('customers')
+          .select('id')
+          .eq('company_id', companyId)
+          .ilike('name', `%${escaped}%`)
+          .limit(10)
+        for (const c of matched ?? []) collected.add(c.id)
+      }
+      customerIds = Array.from(collected)
+
+      // Date window anchored on `due_date`, NOT `invoice_date`. Customer
+      // payments arrive close to (or after) the due date; for an invoice
+      // with 60–90 day terms, anchoring on invoice_date would push the
+      // expected payment outside a ±60-day window and the guard would miss
+      // genuine matches. due_date is the better proxy for "around when the
+      // payment is expected."
+      const txDateMs = new Date(transaction.date).getTime()
+      const dueDateLow = new Date(txDateMs - DUPLICATE_DATE_WINDOW_DAYS * 24 * 3600 * 1000)
+        .toISOString()
+        .split('T')[0]
+      const dueDateHigh = new Date(txDateMs + DUPLICATE_DATE_WINDOW_DAYS * 24 * 3600 * 1000)
+        .toISOString()
+        .split('T')[0]
+
+      type CandidateRow = {
+        id: string
+        invoice_number: string | null
+        invoice_date: string
+        due_date: string | null
+        remaining_amount: number | null
+        total: number
+        currency: string
+        customer: { name?: string } | null
+      }
+      const openInvoiceCandidates: CandidateRow[] = []
+
+      if (customerIds.length > 0) {
+        const { data: byCustomer } = await supabase
+          .from('invoices')
+          .select(
+            'id, invoice_number, invoice_date, due_date, remaining_amount, total, currency, customer:customers(name)',
+          )
+          .eq('company_id', companyId)
+          .in('customer_id', customerIds)
+          .in('status', ['sent', 'overdue', 'partially_paid'])
+          .gte('remaining_amount', windowLow)
+          .lte('remaining_amount', windowHigh)
+          .gte('due_date', dueDateLow)
+          .lte('due_date', dueDateHigh)
+          .order('due_date', { ascending: false })
+          .limit(5)
+        for (const row of (byCustomer ?? []) as unknown as CandidateRow[]) {
+          openInvoiceCandidates.push(row)
+        }
+      }
+
+      // OCR pass: if the bank-tx reference matches an open invoice's
+      // invoice_number, surface it regardless of customer-name match. This
+      // catches the common case where the bank populated `reference` but
+      // neither merchant_name nor description carried the customer name.
+      const txReference = (transaction as Transaction & { reference?: string | null }).reference
+      const normalizedTxRef = normalizeOcrReference(txReference ?? null)
+      if (normalizedTxRef) {
+        const { data: byRef } = await supabase
+          .from('invoices')
+          .select(
+            'id, invoice_number, invoice_date, due_date, remaining_amount, total, currency, customer:customers(name)',
+          )
+          .eq('company_id', companyId)
+          .in('status', ['sent', 'overdue', 'partially_paid'])
+          .gte('remaining_amount', windowLow)
+          .lte('remaining_amount', windowHigh)
+          .gte('due_date', dueDateLow)
+          .lte('due_date', dueDateHigh)
+          .order('due_date', { ascending: false })
+          .limit(20)
+        for (const row of (byRef ?? []) as unknown as CandidateRow[]) {
+          if (normalizeOcrReference(row.invoice_number) === normalizedTxRef) {
+            if (!openInvoiceCandidates.some((existing) => existing.id === row.id)) {
+              openInvoiceCandidates.unshift(row)
+            }
+          }
+        }
+      }
+
+      if (openInvoiceCandidates.length > 0) {
+        return errorResponseFromCode('TX_CATEGORIZE_SUGGEST_CI_MATCH', txLog, {
+          requestId,
+          details: {
+            candidates: openInvoiceCandidates.slice(0, 5).map((inv) => {
+              const reasonOcr =
+                normalizedTxRef && normalizeOcrReference(inv.invoice_number) === normalizedTxRef
+              return {
+                invoice_id: inv.id,
+                invoice_number: inv.invoice_number,
+                invoice_date: inv.invoice_date,
+                remaining_amount: inv.remaining_amount ?? inv.total,
+                currency: inv.currency,
+                customer_name: inv.customer?.name ?? null,
+                match_reason: reasonOcr ? ('ocr_exact' as const) : ('name_amount_fuzzy' as const),
+              }
+            }),
+          },
+        })
       }
     }
 

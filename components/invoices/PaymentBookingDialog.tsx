@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
+import { useRouter } from 'next/navigation'
 import {
   Dialog,
   DialogContent,
@@ -17,12 +18,31 @@ import { useToast } from '@/components/ui/use-toast'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { proposePaymentLines } from '@/lib/bookkeeping/propose-payment-lines'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
 import { Plus, Trash2, Loader2 } from 'lucide-react'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import type { Invoice, InvoiceItem, Customer, BASAccount, EntityType } from '@/types'
+
+type DuplicateMatchReason = 'ocr_exact' | 'name_amount_fuzzy' | 'amount_only'
+
+interface DuplicateCandidate {
+  id: string
+  date: string
+  amount: number
+  description: string | null
+  merchant_name: string | null
+  reference: string | null
+  match_reason: DuplicateMatchReason
+  match_confidence: number
+}
+
+const MATCH_REASON_LABEL: Record<DuplicateMatchReason, string> = {
+  ocr_exact: 'Exakt OCR-träff',
+  name_amount_fuzzy: 'Sannolik träff',
+  amount_only: 'Möjlig träff',
+}
 
 interface InvoiceWithRelations extends Invoice {
   customer: Customer
@@ -45,6 +65,7 @@ export default function PaymentBookingDialog({
   onSuccess,
 }: PaymentBookingDialogProps) {
   const { toast } = useToast()
+  const router = useRouter()
   const supabase = createClient()
   const { company } = useCompany()
 
@@ -53,11 +74,13 @@ export default function PaymentBookingDialog({
   const [paymentDate, setPaymentDate] = useState(() => new Date().toISOString().split('T')[0])
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isInitialized, setIsInitialized] = useState(false)
+  const [duplicateCandidates, setDuplicateCandidates] = useState<DuplicateCandidate[] | null>(null)
 
   // Load accounts and settings when dialog opens
   useEffect(() => {
     if (!open) {
       setIsInitialized(false)
+      setDuplicateCandidates(null)
       return
     }
 
@@ -162,7 +185,7 @@ export default function PaymentBookingDialog({
     setLines((prev) => prev.filter((_, i) => i !== index))
   }
 
-  const handleSubmit = async () => {
+  const submit = async (force: boolean) => {
     if (!isBalanced) return
 
     setIsSubmitting(true)
@@ -183,11 +206,20 @@ export default function PaymentBookingDialog({
         body: JSON.stringify({
           payment_date: paymentDate,
           lines: apiLines,
+          ...(force ? { force: true } : {}),
         }),
       })
 
       if (!response.ok) {
         const data = await response.json()
+        const code = (data as { error?: { code?: string } })?.error?.code
+        if (code === 'INVOICE_PAID_LIKELY_DUPLICATE') {
+          const details = (data as { error?: { details?: { candidates?: DuplicateCandidate[] } } })
+            ?.error?.details
+          setDuplicateCandidates(details?.candidates ?? [])
+          setIsSubmitting(false)
+          return
+        }
         const error = new Error('Kunde inte markera som betald') as Error & { body?: unknown; status?: number }
         error.body = data
         error.status = response.status
@@ -208,6 +240,14 @@ export default function PaymentBookingDialog({
     setIsSubmitting(false)
   }
 
+  const handleSubmit = () => submit(false)
+  const handleForceSubmit = () => submit(true)
+
+  const handleLinkExisting = (transactionId: string) => {
+    onOpenChange(false)
+    router.push(`/transactions?highlight=${encodeURIComponent(transactionId)}`)
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[680px]">
@@ -221,7 +261,58 @@ export default function PaymentBookingDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {!isInitialized ? (
+        {duplicateCandidates && duplicateCandidates.length > 0 ? (
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <p className="text-sm font-medium">Möjlig dubblettbetalning</p>
+              <p className="text-sm text-muted-foreground">
+                {duplicateCandidates.length === 1
+                  ? 'En inkommande banktransaktion ser ut att vara denna betalning. Länka den istället för att skapa en ny verifikation, eller bokför ändå om du är säker.'
+                  : `${duplicateCandidates.length} inkommande banktransaktioner ser ut att kunna vara denna betalning. Länka rätt transaktion istället för att skapa en ny verifikation, eller bokför ändå om du är säker.`}
+              </p>
+            </div>
+            <ul className="space-y-2">
+              {duplicateCandidates.map((c) => {
+                const reasonVariant: 'success' | 'secondary' | 'outline' =
+                  c.match_reason === 'ocr_exact'
+                    ? 'success'
+                    : c.match_reason === 'name_amount_fuzzy'
+                      ? 'secondary'
+                      : 'outline'
+                return (
+                  <li
+                    key={c.id}
+                    className="flex flex-col gap-2 rounded-lg border bg-card p-3 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant={reasonVariant}>{MATCH_REASON_LABEL[c.match_reason]}</Badge>
+                        <span className="text-sm tabular-nums text-muted-foreground">
+                          {formatDate(c.date)}
+                        </span>
+                        <span className="text-sm font-medium tabular-nums">
+                          {formatCurrency(c.amount, invoice.currency)}
+                        </span>
+                      </div>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {c.merchant_name || c.description || '—'}
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleLinkExisting(c.id)}
+                      className="shrink-0"
+                    >
+                      Länka transaktion
+                    </Button>
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        ) : !isInitialized ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
@@ -386,10 +477,25 @@ export default function PaymentBookingDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting} className="w-full sm:w-auto min-h-11">
             Avbryt
           </Button>
-          <Button onClick={handleSubmit} disabled={!isBalanced || isSubmitting || !isInitialized} className="w-full sm:w-auto min-h-11">
-            {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Bekräfta &amp; bokför
-          </Button>
+          {duplicateCandidates && duplicateCandidates.length > 0 ? (
+            <Button
+              onClick={handleForceSubmit}
+              disabled={!isBalanced || isSubmitting}
+              className="w-full sm:w-auto min-h-11"
+            >
+              {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Bokför ändå
+            </Button>
+          ) : (
+            <Button
+              onClick={handleSubmit}
+              disabled={!isBalanced || isSubmitting || !isInitialized}
+              className="w-full sm:w-auto min-h-11"
+            >
+              {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Bekräfta &amp; bokför
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

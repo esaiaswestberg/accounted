@@ -310,6 +310,116 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
     expect(body.error.code).toBe('INVOICE_PAID_NOT_FOUND')
   })
 
+  it('returns 409 INVOICE_PAID_LIKELY_DUPLICATE when a matching unlinked transaction exists', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: SENT_INVOICE, error: null },
+        company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        transactions: {
+          data: [
+            {
+              id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+              date: '2026-05-10',
+              amount: 12500,
+              description: 'Inbetalning Acme AB',
+              merchant_name: 'Acme AB',
+              reference: null,
+            },
+          ],
+          error: null,
+        },
+      }),
+    )
+
+    const res = await markPaid(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`,
+        { payment_date: '2026-05-12' },
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_PAID_LIKELY_DUPLICATE')
+    expect(body.error.details.candidates).toHaveLength(1)
+    expect(body.error.details.candidates[0].match_reason).toBe('name_amount_fuzzy')
+    expect(mockPayment).not.toHaveBeenCalled()
+  })
+
+  it('proceeds when force=true even if a matching transaction exists', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: [
+          { data: SENT_INVOICE, error: null },
+          { data: PAID_INVOICE, error: null },
+        ],
+        company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        // transactions queue not consulted: force=true short-circuits the guard
+      }),
+    )
+
+    const res = await markPaid(
+      new Request(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer test-fixture-not-a-real-key',
+            'Content-Type': 'application/json',
+            // Fresh idempotency key for the force retry (the original is body-hash bound)
+            'Idempotency-Key': 'idem2222-2222-4abc-8def-1234567890ab',
+          },
+          body: JSON.stringify({ force: true, payment_date: '2026-05-12' }),
+        },
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.status).toBe('paid')
+    expect(mockPayment).toHaveBeenCalled()
+  })
+
+  it('dry-run surfaces 409 INVOICE_PAID_LIKELY_DUPLICATE before previewing', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: SENT_INVOICE, error: null },
+        company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        transactions: {
+          data: [
+            {
+              id: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+              date: '2026-05-10',
+              amount: 12500,
+              description: 'Inbetalning Acme AB',
+              merchant_name: 'Acme AB',
+              reference: null,
+            },
+          ],
+          error: null,
+        },
+      }),
+    )
+
+    const res = await markPaid(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid?dry_run=true`,
+        { payment_date: '2026-05-12' },
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_PAID_LIKELY_DUPLICATE')
+    expect(mockPayment).not.toHaveBeenCalled()
+  })
+
   it('rejects keys without invoices:write scope', async () => {
     mockValidate.mockResolvedValue({
       userId: USER_ID,

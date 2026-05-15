@@ -9,6 +9,7 @@ import { MarkInvoicePaidSchema } from '@/lib/api/schemas'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import type { CreateJournalEntryInput, EntityType, Invoice } from '@/types'
 
 ensureInitialized()
@@ -50,6 +51,7 @@ export const POST = withRouteContext(
     let exchangeRateDifference: number | undefined
     let bodyPaymentDate: string | undefined
     let customLines: { account_number: string; debit_amount: number; credit_amount: number; line_description?: string }[] | undefined
+    let force = false
     let rawBody: unknown
     try {
       const text = await request.text()
@@ -72,10 +74,55 @@ export const POST = withRouteContext(
       exchangeRateDifference = parsed.data.exchange_rate_difference
       bodyPaymentDate = parsed.data.payment_date
       customLines = parsed.data.lines
+      force = parsed.data.force === true
     }
 
     const now = new Date().toISOString()
     const paymentDate = bodyPaymentDate || now.split('T')[0]
+
+    // Duplicate-payment guard: surface a likely-matching unlinked inbound bank
+    // transaction before booking. Skipped on partial payments (explicit,
+    // deliberate action), on force=true, and on invoices without a resolved
+    // customer name. Mirrors the supplier-side guard at
+    // /api/supplier-invoices/[id]/mark-paid. The dialog always sends custom
+    // lines, so the partial-payment skip is gated on total debit vs remaining,
+    // not on the mere presence of customLines.
+    const remainingAmount =
+      (invoice as Invoice & { remaining_amount?: number }).remaining_amount ?? invoice.total
+    const paymentAmount = customLines
+      ? customLines.reduce((s, l) => s + l.debit_amount, 0)
+      : remainingAmount
+    const paidRounded = Math.round(paymentAmount * 100) / 100
+    const remainingRounded = Math.round(remainingAmount * 100) / 100
+    if (!force && paidRounded >= remainingRounded) {
+      const customerName = (invoice as Invoice & { customer?: { name?: string } }).customer?.name
+      if (!customerName) {
+        opLog.warn('duplicate-payment guard skipped', {
+          reason: 'missing_customer_name',
+          invoiceId: id,
+        })
+      } else {
+        const candidates = await findDuplicatePaymentCandidatesForInvoice(supabase, {
+          companyId: companyId!,
+          invoice: { invoice_number: invoice.invoice_number, customer_name: customerName },
+          paymentAmount,
+          paymentDate,
+        })
+        if (candidates.length > 0) {
+          return errorResponseFromCode('INVOICE_PAID_LIKELY_DUPLICATE', opLog, {
+            requestId,
+            details: { candidates },
+          })
+        }
+      }
+    } else if (force) {
+      opLog.warn('duplicate-payment guard bypassed', {
+        reason: 'force=true',
+        invoiceId: id,
+        userId: user.id,
+        paymentAmount,
+      })
+    }
 
     const { data: settings } = await supabase
       .from('company_settings')

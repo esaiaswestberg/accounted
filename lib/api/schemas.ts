@@ -187,6 +187,11 @@ export const MarkInvoicePaidSchema = z.object({
     credit_amount: nonNegativeAmount.default(0),
     line_description: z.string().optional(),
   })).min(2).optional(),
+  // Bypass the duplicate-payment guard. Set after the user reviews the
+  // candidate list returned by INVOICE_PAID_LIKELY_DUPLICATE and confirms
+  // none of them are this payment. v1 callers must use a fresh
+  // Idempotency-Key on the retry — the original is body-hash bound.
+  force: z.boolean().optional(),
 })
 
 // ============================================================

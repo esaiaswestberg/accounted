@@ -28,3 +28,15 @@ export function escapeLikePattern(value: string): string {
     : value
   return truncated.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')
 }
+
+/**
+ * Normalize a Swedish payment reference (OCR / fakturanummer) for equality
+ * comparison. Banks emit references with varying separators ("2026-0042",
+ * "2026 0042", "2026/0042"); the OCR-spec equality is over the digits only.
+ * Returns "" for nullish/empty so callers can short-circuit without
+ * branching.
+ */
+export function normalizeOcrReference(value: string | null | undefined): string {
+  if (!value) return ''
+  return value.replace(/\D/g, '')
+}
