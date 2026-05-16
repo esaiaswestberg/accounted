@@ -208,6 +208,34 @@ describe('INK2R Account Mappings', () => {
       expect(findSRUCodeForAccount('8900')).toBe('7528')
       expect(findSRUCodeForAccount('8910')).toBe('7528')
     })
+
+    describe('bokslutsdispositioner (BAS 2020-aligned)', () => {
+      // These mappings were corrected when the Phase 2 bokslut calculators
+      // landed — the previous ranges (8810/8830/8840) targeted accounts that
+      // BAS doesn't seed. Locking the corrected mapping prevents regression.
+      it('8811 -> 7525 (Avsättning till periodiseringsfond)', () => {
+        expect(findSRUCodeForAccount('8811')).toBe('7525')
+      })
+      it('8819 -> 7420 (Återföring av periodiseringsfond)', () => {
+        expect(findSRUCodeForAccount('8819')).toBe('7420')
+      })
+      it('8820 -> 7419 (Mottagna koncernbidrag)', () => {
+        expect(findSRUCodeForAccount('8820')).toBe('7419')
+      })
+      it('8830 -> 7524 (Lämnade koncernbidrag)', () => {
+        expect(findSRUCodeForAccount('8830')).toBe('7524')
+      })
+      it('8850-8859 -> 7421 (Förändring av överavskrivningar)', () => {
+        expect(findSRUCodeForAccount('8850')).toBe('7421')
+        expect(findSRUCodeForAccount('8853')).toBe('7421') // M&I sub-cat
+        expect(findSRUCodeForAccount('8859')).toBe('7421')
+      })
+      it('8840 + 8860-8899 -> 7422 (Övriga bokslutsdispositioner)', () => {
+        expect(findSRUCodeForAccount('8840')).toBe('7422')
+        expect(findSRUCodeForAccount('8860')).toBe('7422')
+        expect(findSRUCodeForAccount('8899')).toBe('7422')
+      })
+    })
   })
 
   describe('no overlap between mappings', () => {

@@ -28,8 +28,9 @@ import {
  * bas.se/kontoplaner/sru/ and Skatteverket field code spec.
  *
  * INK2R contains the full balance sheet + income statement.
- * INK2S auto-derives basic fields (result + tax → taxable result).
- * Manual tax adjustments (periodiseringsfonder etc.) are handled by the accountant.
+ * INK2S auto-derives basic fields (result + tax → taxable result), as well as
+ * periodiseringsfond and överavskrivningar when those have been posted via the
+ * bokslut-dispositions calculators in lib/bokslut/.
  */
 
 /**
@@ -561,12 +562,21 @@ export const INK2R_ACCOUNT_MAPPINGS: INK2AccountMapping[] = [
     normalBalance: 'debit',
     accountRanges: [{ start: '8500', end: '8599' }],
   },
+  // Bokslutsdispositioner — account numbers per BAS 2020 (verified against
+  // lib/bookkeeping/bas-data/class-8-financial.ts).
   {
-    sruCode: '7524',
-    description: 'Lämnade koncernbidrag',
+    sruCode: '7525',
+    description: 'Avsättning till periodiseringsfond',
     section: 'income_statement',
     normalBalance: 'debit',
-    accountRanges: [{ start: '8810', end: '8810' }],
+    accountRanges: [{ start: '8811', end: '8811' }],
+  },
+  {
+    sruCode: '7420',
+    description: 'Återföring av periodiseringsfond',
+    section: 'income_statement',
+    normalBalance: 'credit',
+    accountRanges: [{ start: '8819', end: '8819' }],
   },
   {
     sruCode: '7419',
@@ -576,32 +586,30 @@ export const INK2R_ACCOUNT_MAPPINGS: INK2AccountMapping[] = [
     accountRanges: [{ start: '8820', end: '8820' }],
   },
   {
-    sruCode: '7420',
-    description: 'Återföring av periodiseringsfond',
-    section: 'income_statement',
-    normalBalance: 'credit',
-    accountRanges: [{ start: '8830', end: '8830' }],
-  },
-  {
-    sruCode: '7525',
-    description: 'Avsättning till periodiseringsfond',
+    sruCode: '7524',
+    description: 'Lämnade koncernbidrag',
     section: 'income_statement',
     normalBalance: 'debit',
-    accountRanges: [{ start: '8840', end: '8840' }],
+    accountRanges: [{ start: '8830', end: '8830' }],
   },
   {
     sruCode: '7421',
     description: 'Förändring av överavskrivningar',
     section: 'income_statement',
     normalBalance: 'net',
-    accountRanges: [{ start: '8850', end: '8850' }],
+    // 8850 = grupp, 8851-8853 = per kategori (immateriella, byggnader, M&I)
+    accountRanges: [{ start: '8850', end: '8859' }],
   },
   {
     sruCode: '7422',
     description: 'Övriga bokslutsdispositioner',
     section: 'income_statement',
     normalBalance: 'net',
-    accountRanges: [{ start: '8860', end: '8899' }],
+    // 8840 = Lämnade gottgörelser, 8860-8899 = övriga
+    accountRanges: [
+      { start: '8840', end: '8840' },
+      { start: '8860', end: '8899' },
+    ],
   },
   {
     sruCode: '7528',

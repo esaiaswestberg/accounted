@@ -26,6 +26,7 @@ import {
   TrendingUp,
   ClipboardCheck,
   HandCoins,
+  Package,
 } from 'lucide-react'
 import { getBranding } from '@/lib/branding/service'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
@@ -79,6 +80,7 @@ const navItems: NavItem[] = [
   { href: '/pending', label: 'Granskning', icon: ClipboardCheck, group: 'redovisning' },
   { href: '/transactions', label: 'Transaktioner', icon: ArrowLeftRight, group: 'redovisning' },
   { href: '/bookkeeping', label: 'Bokföring', icon: BookOpen, group: 'redovisning' },
+  { href: '/assets', label: 'Anläggningstillgångar', icon: Package, group: 'redovisning' },
   { href: '/reports', label: 'Rapporter', icon: BarChart3, group: 'redovisning' },
   { href: '/import', label: 'Importera', icon: Upload, group: 'redovisning' },
   // Personal — enabled in production with a "Beta" badge while we validate the

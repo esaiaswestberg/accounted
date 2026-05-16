@@ -2288,6 +2288,62 @@ export interface YearEndResult {
 }
 
 // ============================================================
+// Asset Register Types (Anläggningsregister)
+// ============================================================
+
+export type AssetCategory =
+  | 'immaterial'
+  | 'building'
+  | 'land_improvement'
+  | 'machinery'
+  | 'equipment'
+  | 'vehicle'
+  | 'computer'
+  | 'other_tangible'
+
+export type DepreciationMethod =
+  | 'linear'
+  | 'declining_balance_30'
+  | 'declining_balance_20'
+
+export interface Asset {
+  id: string
+  user_id: string
+  company_id: string
+  name: string
+  category: AssetCategory
+  acquisition_date: string
+  acquisition_cost: number
+  salvage_value: number
+  useful_life_months: number
+  depreciation_method: DepreciationMethod
+  bas_asset_account: string
+  bas_accumulated_account: string
+  bas_expense_account: string
+  disposed_at: string | null
+  disposed_proceeds: number | null
+  /** Reserved for K3 component depreciation (BFNAR 2012:1 ch.17.4). Empty
+   *  / null for K2 — Phase 5 will fill this when K3 ships. */
+  k3_components: unknown | null
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface DepreciationSchedule {
+  id: string
+  user_id: string
+  company_id: string
+  asset_id: string
+  fiscal_period_id: string
+  planned_depreciation: number
+  journal_entry_id: string | null
+  posted_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+// ============================================================
 // IB/UB Continuity Check Types (Avstämning ingående/utgående balans)
 // ============================================================
 
