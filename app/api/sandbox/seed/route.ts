@@ -3,30 +3,43 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { createLogger } from '@/lib/logger'
+import { checkRateLimit } from '@/lib/auth/rate-limit-http'
+import { truncateIp } from '@/lib/api/v1/with-api-v1'
+
+// Anonymous sign-in is enabled in all environments so visitors can try the
+// product; a per-/24 cap on the seed endpoint keeps a single network from
+// spinning up arbitrary sandbox companies. Idempotent for legit users, so 5/h
+// covers retries; an attacker has to rotate /24s to scale abuse.
+const RATE_LIMIT = { maxRequests: 5, windowMs: 60 * 60 * 1000 }
 
 /**
  * POST /api/sandbox/seed
  * Seeds demo data for an anonymous sandbox user.
  * Only callable by anonymous users (is_anonymous === true).
- *
- * Defense-in-depth: also requires SANDBOX_ENABLED=true. The anonymous-user
- * check is the primary control; the env guard exists so that if anonymous
- * sign-in is ever turned on accidentally in a production environment, this
- * destructive seed endpoint stays inert until an operator explicitly opts in.
  */
-export async function POST() {
+export async function POST(request: Request) {
   // Per-request logger so seed-failure entries are correlatable in the SIEM.
   // Cannot reuse withRouteContext here — it requires an active company, but
   // the sandbox seed runs *before* a company exists for the user.
   const requestId = `req_${crypto.randomUUID()}`
   const log = createLogger('sandbox:seed', { requestId })
 
-  if (process.env.SANDBOX_ENABLED !== 'true') {
-    return NextResponse.json(
-      { error: 'Sandbox is not enabled in this environment', requestId },
-      { status: 403 },
-    )
+  const fwd = request.headers.get('x-forwarded-for')
+  const rawIp = fwd ? fwd.split(',')[0]?.trim() : request.headers.get('x-real-ip') ?? undefined
+  // Fall back to a shared 'unknown' bucket when the proxy doesn't surface a
+  // client IP — keeps the limit enforced under a misconfigured deploy rather
+  // than failing open. Truncated /24 elsewhere is the normal path.
+  const ipIdentifier = truncateIp(rawIp || undefined) ?? 'unknown'
+  if (rawIp && ipIdentifier === 'unknown') {
+    log.warn('unparseable forwarded-for header on sandbox seed', { headerLength: rawIp.length })
   }
+
+  const rl = await checkRateLimit({
+    prefix: 'sandbox:seed',
+    identifier: ipIdentifier,
+    ...RATE_LIMIT,
+  })
+  if (!rl.ok) return rl.response!
 
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()

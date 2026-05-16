@@ -1099,7 +1099,19 @@ export default function NewSupplierInvoicePage() {
                         />
                       </td>
                       <td className="py-2 pr-2">
-                        <Input placeholder="Beskrivning" {...register(`items.${index}.description`)} />
+                        <Controller
+                          name={`items.${index}.description`}
+                          control={control}
+                          render={({ field }) => (
+                            <Input
+                              placeholder="Beskrivning"
+                              ref={field.ref}
+                              value={field.value ?? ''}
+                              onChange={field.onChange}
+                              onBlur={field.onBlur}
+                            />
+                          )}
+                        />
                       </td>
                       <td className="py-2 pr-2">
                         <Controller
@@ -1177,7 +1189,19 @@ export default function NewSupplierInvoicePage() {
                   </div>
                   <div className="space-y-2">
                     <Label className="text-xs text-muted-foreground">Beskrivning</Label>
-                    <Input placeholder="Beskrivning" {...register(`items.${index}.description`)} />
+                    <Controller
+                      name={`items.${index}.description`}
+                      control={control}
+                      render={({ field }) => (
+                        <Input
+                          placeholder="Beskrivning"
+                          ref={field.ref}
+                          value={field.value ?? ''}
+                          onChange={field.onChange}
+                          onBlur={field.onBlur}
+                        />
+                      )}
+                    />
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-2">

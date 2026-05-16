@@ -21,6 +21,7 @@ type Status =
       disabled?: boolean
     }
 
+// docs: https://www7.skatteverket.se/portal-wapi/open/apier-och-oppna-data/utvecklarportalen/v1/getFile/tjanstebeskrivning-skattekonto-hamta-huvudmans-saldo-och-transaktioner-v101
 const SCOPE_LABELS: Record<string, string> = {
   momsdeklaration: 'Momsdeklaration',
   inkforetag: 'Företagsinformation',
