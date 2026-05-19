@@ -18,6 +18,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, Plus, Copy, Check, Trash2, Key, ChevronDown } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { getBranding } from '@/lib/branding/service'
 import type { ApiKeyScope } from '@/lib/auth/api-keys'
 
@@ -180,6 +181,48 @@ function CopyBlock({ text }: { text: string }) {
   )
 }
 
+function ScopeCard({
+  entry,
+  checked,
+  onCheckedChange,
+}: {
+  entry: ScopeEntry
+  checked: boolean
+  onCheckedChange: (checked: boolean) => void
+}) {
+  const dashIdx = entry.label.indexOf(' — ')
+  const verb = dashIdx > 0 ? entry.label.slice(0, dashIdx) : entry.label
+  const description = dashIdx > 0 ? entry.label.slice(dashIdx + 3) : ''
+
+  return (
+    <label
+      className={cn(
+        'flex min-h-[68px] cursor-pointer flex-col gap-1 rounded-md border p-2 transition-colors',
+        checked
+          ? 'border-foreground/30 bg-secondary'
+          : 'border-border hover:bg-secondary/60'
+      )}
+    >
+      <div className="flex items-center gap-2">
+        <Checkbox
+          checked={checked}
+          onCheckedChange={onCheckedChange}
+          className="shrink-0"
+        />
+        <span className="flex-1 text-xs font-medium text-foreground">{verb}</span>
+        <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+          {entry.tools > 0 ? `${entry.tools} verktyg` : 'REST'}
+        </span>
+      </div>
+      {description && (
+        <p className="ml-6 line-clamp-2 text-[11px] leading-snug text-muted-foreground">
+          {description}
+        </p>
+      )}
+    </label>
+  )
+}
+
 export function ApiKeysPanel() {
   const { toast } = useToast()
   const { dialogProps: revokeDialogProps, confirm: confirmRevoke } = useDestructiveConfirm()
@@ -331,7 +374,7 @@ export function ApiKeysPanel() {
                               : `${scopeCount} behörigheter`}
                         </span>
                       </div>
-                      <div className="flex items-center gap-3 mt-1">
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
                         <code className="text-xs text-muted-foreground font-mono">
                           {key.key_prefix}...
                         </code>
@@ -433,14 +476,14 @@ export function ApiKeysPanel() {
 
       {/* Create key dialog */}
       <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-        <DialogContent>
+        <DialogContent className="max-w-[calc(100vw-2rem)] rounded-2xl p-4 sm:max-w-3xl sm:p-6">
           <DialogHeader>
             <DialogTitle>Skapa API-nyckel</DialogTitle>
             <DialogDescription>
               Ge nyckeln ett namn så du vet vad den används till.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
+          <div className="space-y-6">
             <div className="space-y-2">
               <Label htmlFor="key-name">Namn</Label>
               <Input
@@ -451,63 +494,58 @@ export function ApiKeysPanel() {
                 onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
               />
             </div>
-            <div className="space-y-2">
-              <Label>Behörigheter</Label>
-              <p className="text-xs text-muted-foreground">
-                Välj vad nyckeln ska ha åtkomst till.
-              </p>
-              <div className="space-y-3 pt-1">
+            <div className="space-y-3">
+              <div className="flex items-baseline justify-between gap-3">
+                <div className="space-y-1">
+                  <Label>Behörigheter</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Välj vad nyckeln ska ha åtkomst till.
+                  </p>
+                </div>
+                <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                  {newKeyScopes.size} av {ALL_SCOPES.length} valda
+                </span>
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 {SCOPE_GROUPS.map((group) => (
-                  <div key={group.domain} className="space-y-1.5">
-                    <p className="text-sm font-medium">{group.label}</p>
-                    <div className="space-y-1 pl-1">
+                  <div key={group.domain} className="space-y-2">
+                    <h4 className="text-sm font-medium">{group.label}</h4>
+                    <div className="space-y-2 px-2">
                       {group.read && (
-                        <label className="flex items-center gap-2 cursor-pointer">
-                          <Checkbox
-                            checked={newKeyScopes.has(group.read.scope)}
-                            onCheckedChange={(checked) => {
-                              setNewKeyScopes((prev) => {
-                                const next = new Set(prev)
-                                if (checked) {
-                                  next.add(group.read!.scope)
-                                } else {
-                                  next.delete(group.read!.scope)
-                                  // Remove write too — write without read makes no sense
-                                  if (group.write) next.delete(group.write.scope)
-                                }
-                                return next
-                              })
-                            }}
-                          />
-                          <span className="text-xs text-muted-foreground">{group.read.label}</span>
-                          <span className="text-[10px] tabular-nums text-muted-foreground/60">
-                            {group.read.tools > 0 ? `${group.read.tools} verktyg` : 'REST'}
-                          </span>
-                        </label>
+                        <ScopeCard
+                          entry={group.read}
+                          checked={newKeyScopes.has(group.read.scope)}
+                          onCheckedChange={(checked) => {
+                            setNewKeyScopes((prev) => {
+                              const next = new Set(prev)
+                              if (checked) {
+                                next.add(group.read!.scope)
+                              } else {
+                                next.delete(group.read!.scope)
+                                if (group.write) next.delete(group.write.scope)
+                              }
+                              return next
+                            })
+                          }}
+                        />
                       )}
                       {group.write && (
-                        <label className="flex items-center gap-2 cursor-pointer">
-                          <Checkbox
-                            checked={newKeyScopes.has(group.write.scope)}
-                            onCheckedChange={(checked) => {
-                              setNewKeyScopes((prev) => {
-                                const next = new Set(prev)
-                                if (checked) {
-                                  next.add(group.write!.scope)
-                                  // Auto-check read when write is checked (when read exists)
-                                  if (group.read) next.add(group.read.scope)
-                                } else {
-                                  next.delete(group.write!.scope)
-                                }
-                                return next
-                              })
-                            }}
-                          />
-                          <span className="text-xs text-muted-foreground">{group.write.label}</span>
-                          <span className="text-[10px] tabular-nums text-muted-foreground/60">
-                            {group.write.tools > 0 ? `${group.write.tools} verktyg` : 'REST'}
-                          </span>
-                        </label>
+                        <ScopeCard
+                          entry={group.write}
+                          checked={newKeyScopes.has(group.write.scope)}
+                          onCheckedChange={(checked) => {
+                            setNewKeyScopes((prev) => {
+                              const next = new Set(prev)
+                              if (checked) {
+                                next.add(group.write!.scope)
+                                if (group.read) next.add(group.read.scope)
+                              } else {
+                                next.delete(group.write!.scope)
+                              }
+                              return next
+                            })
+                          }}
+                        />
                       )}
                     </div>
                   </div>

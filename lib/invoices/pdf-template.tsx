@@ -316,9 +316,10 @@ interface InvoicePDFProps {
   items: InvoiceItem[]
   company: CompanySettings
   originalInvoiceNumber?: string
+  isPreview?: boolean
 }
 
-export function InvoicePDF({ invoice, customer, items, company, originalInvoiceNumber }: InvoicePDFProps) {
+export function InvoicePDF({ invoice, customer, items, company, originalInvoiceNumber, isPreview }: InvoicePDFProps) {
   const isCreditNote = !!invoice.credited_invoice_id
 
   // Check if items have mixed VAT rates
@@ -360,7 +361,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 : 'Detta utkast har makulerats och är inte ett giltigt fakturaunderlag.'}
             </Text>
           </View>
-        ) : (invoice.status === 'draft' || !invoice.invoice_number) && (
+        ) : isPreview ? null : (invoice.status === 'draft' || !invoice.invoice_number) && (
           <View style={styles.draftBanner}>
             <Text style={styles.draftBannerTitle}>UTKAST – inte en giltig faktura</Text>
             <Text style={styles.draftBannerText}>

@@ -15,7 +15,7 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import { invoiceNumberDisplay } from '@/lib/invoices/display'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
-import { Plus, Search, Receipt, Lock } from 'lucide-react'
+import { Plus, Search, Receipt, Lock, Repeat } from 'lucide-react'
 import { EmptyInvoices, EmptyState } from '@/components/ui/empty-state'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -138,22 +138,30 @@ export default function InvoicesPage() {
       <PageHeader
         title="Fakturor"
         action={
-          canWrite ? (
-            <Link href="/invoices/new">
-              <Button>
-                <Plus className="mr-2 h-4 w-4" />
-                Ny faktura
+          <div className="flex gap-2">
+            <Link href="/invoices/recurring">
+              <Button variant="secondary">
+                <Repeat className="mr-2 h-4 w-4" />
+                Återkommande
               </Button>
             </Link>
-          ) : (
-            <Button
-              disabled
-              title="Du har endast läsbehörighet i detta företag"
-            >
-              <Lock className="mr-2 h-4 w-4" />
-              Ny faktura
-            </Button>
-          )
+            {canWrite ? (
+              <Link href="/invoices/new">
+                <Button>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Ny faktura
+                </Button>
+              </Link>
+            ) : (
+              <Button
+                disabled
+                title="Du har endast läsbehörighet i detta företag"
+              >
+                <Lock className="mr-2 h-4 w-4" />
+                Ny faktura
+              </Button>
+            )}
+          </div>
         }
       />
 

@@ -24,7 +24,7 @@ export async function POST(request: Request) {
   const companyId = await requireCompanyId(supabase, user.id)
 
   const body = await request.json()
-  const { customer_id, invoice_date, due_date, delivery_date, currency, items, your_reference, our_reference, notes, document_type } = body
+  const { customer_id, invoice_date, due_date, delivery_date, currency, items, your_reference, our_reference, notes, document_type, invoice_number } = body
 
   if (!customer_id || !items || items.length === 0) {
     return NextResponse.json({ error: 'Kunduppgifter och rader krävs' }, { status: 400 })
@@ -90,7 +90,7 @@ export async function POST(request: Request) {
     id: 'preview',
     user_id: user.id,
     customer_id,
-    invoice_number: 'FÖRHANDSGRANSKNING',
+    invoice_number: typeof invoice_number === 'string' && invoice_number.trim() ? invoice_number : 'FÖRHANDSGRANSKNING',
     invoice_date: invoice_date || new Date().toISOString().split('T')[0],
     due_date: due_date || new Date().toISOString().split('T')[0],
     delivery_date: delivery_date || null,
@@ -127,6 +127,7 @@ export async function POST(request: Request) {
         customer: customer as Customer,
         items: invoiceItems,
         company: company as CompanySettings,
+        isPreview: true,
       })
     )
 

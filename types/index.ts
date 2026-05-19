@@ -707,6 +707,57 @@ export interface InvoiceItem {
   created_at: string
 }
 
+// Recurring Invoice Schedule (template + monthly cadence)
+export type RecurringInvoiceScheduleStatus = 'active' | 'paused'
+
+export interface RecurringInvoiceSchedule {
+  id: string
+  company_id: string
+  user_id: string
+  customer_id: string
+
+  name: string
+
+  // Monthly cadence, day-of-month 1-31. Clamped to last day of month in
+  // shorter months (handled by computeNextRunDate).
+  day_of_month: number
+  payment_terms_days: number
+
+  currency: Currency
+  your_reference: string | null
+  our_reference: string | null
+  notes: string | null
+
+  auto_send: boolean
+  status: RecurringInvoiceScheduleStatus
+
+  next_run_date: string
+  last_run_at: string | null
+  last_invoice_id: string | null
+  last_run_warning: string | null
+  generated_count: number
+
+  created_at: string
+  updated_at: string
+
+  // Relations
+  customer?: Customer
+  items?: RecurringInvoiceScheduleItem[]
+}
+
+export interface RecurringInvoiceScheduleItem {
+  id: string
+  schedule_id: string
+  sort_order: number
+  description: string
+  quantity: number
+  unit: string
+  unit_price: number
+  // null = inherit customer's default VAT rate at spawn time
+  vat_rate: number | null
+  created_at: string
+}
+
 // Tax Rates (reference table)
 export interface TaxRate {
   id: string

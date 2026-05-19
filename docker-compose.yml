@@ -26,4 +26,5 @@ services:
       - APP_URL=http://app:3000
     volumes:
       - ./docker/crontab.self-hosted:/etc/supercronic/crontab:ro
+    init: true
     restart: unless-stopped

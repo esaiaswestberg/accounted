@@ -177,6 +177,56 @@ export const CreateCreditNoteSchema = z.object({
   reason: z.string().optional(),
 })
 
+// ============================================================
+// Recurring invoice schedule schemas
+// ============================================================
+
+// Swedish VAT rates per ML 17 kap 24§ p.9 — null means "use customer default
+// from getAvailableVatRates". Any other value would produce a non-compliant
+// invoice (buyer cannot deduct ingående moms). Cron-time validation against
+// the customer's allowed set still runs in executeRecurringSchedule.
+export const RecurringScheduleItemSchema = z.object({
+  description: z.string().min(1, 'Item description is required'),
+  quantity: z.number().positive('Quantity must be positive'),
+  unit: z.string().min(1, 'Unit is required').default('st'),
+  unit_price: z.number(),
+  vat_rate: z
+    .union([z.literal(0), z.literal(6), z.literal(12), z.literal(25)])
+    .nullable()
+    .optional(),
+})
+
+export const CreateRecurringScheduleSchema = z.object({
+  customer_id: uuid,
+  name: z.string().min(1, 'Schedule name is required').max(200),
+  day_of_month: z.number().int().min(1).max(31),
+  payment_terms_days: z.number().int().min(0).max(90).default(30),
+  currency: CurrencySchema.default('SEK'),
+  your_reference: z.string().optional(),
+  our_reference: z.string().optional(),
+  notes: z.string().optional(),
+  auto_send: z.boolean().default(false),
+  // Optional: when to first run. Defaults to next occurrence of day_of_month
+  // (today if day_of_month === today, otherwise next month).
+  start_date: isoDate.optional(),
+  items: z.array(RecurringScheduleItemSchema).min(1, 'At least one item is required'),
+})
+
+export const UpdateRecurringScheduleSchema = z.object({
+  customer_id: uuid.optional(),
+  name: z.string().min(1).max(200).optional(),
+  day_of_month: z.number().int().min(1).max(31).optional(),
+  payment_terms_days: z.number().int().min(0).max(90).optional(),
+  currency: CurrencySchema.optional(),
+  your_reference: z.string().nullable().optional(),
+  our_reference: z.string().nullable().optional(),
+  notes: z.string().nullable().optional(),
+  auto_send: z.boolean().optional(),
+  status: z.enum(['active', 'paused']).optional(),
+  // Replace all items if provided. Omit to keep existing items unchanged.
+  items: z.array(RecurringScheduleItemSchema).min(1).optional(),
+})
+
 export const MarkInvoicePaidSchema = z.object({
   payment_date: isoDate.optional(),
   exchange_rate_difference: z.number().optional(),

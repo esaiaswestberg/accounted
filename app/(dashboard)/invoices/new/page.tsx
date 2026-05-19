@@ -411,6 +411,7 @@ export default function NewInvoicePage() {
           your_reference: pendingData.your_reference,
           our_reference: pendingData.our_reference,
           notes: pendingData.notes,
+          invoice_number: numberPreview,
         }),
       })
 
