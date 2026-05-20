@@ -45,12 +45,25 @@ export const DEFAULT_SCOPES: ApiKeyScope[] = [
 ]
 
 /**
- * Read-only fallback granted to OAuth-issued keys when the client did not
- * pass an explicit `scope` parameter at /authorize. Per GDPR Art. 25(2)
- * (data protection by default), the silent fallback must never include
- * destructive scopes (*:write, pending_operations:approve, bookkeeping:write).
- * Destructive scopes must be requested explicitly by the client and consented
- * to by the user.
+ * Default scope grant for OAuth-issued keys when the client did not pass an
+ * explicit `scope` parameter at /authorize. Read-only by design — every
+ * write or approval scope must be requested explicitly by the client AND
+ * affirmatively ticked by the user on the consent screen.
+ *
+ * Rationale (do not weaken without a documented security decision):
+ *   - GDPR Art. 25(2) data-protection-by-default: the minimum-necessary
+ *     access set must be the silent baseline.
+ *   - ISO 27001:2022 A.5.18 / A.8.2 / SOC 2 CC6.3: privileged capabilities
+ *     (write, approve) must not be bundled into a default grant.
+ *   - Segregation of Duties (findStageApproveConflict below): granting any
+ *     STAGING_SCOPES member together with `pending_operations:approve` on a
+ *     single key lets an automated agent both stage AND commit financial
+ *     postings without a human-in-the-loop review. Keeping the default
+ *     read-only prevents this combination from being silently issued.
+ *   - BFL 5 kap 5§ / BFNAR 2013:2 behandlingshistorik: write paths that
+ *     create or modify verifikationer must be opt-in at the authorization
+ *     layer; conversational acknowledgement at the agent layer is not an
+ *     auditable substitute.
  */
 export const DEFAULT_OAUTH_SCOPES: ApiKeyScope[] = [
   'transactions:read',

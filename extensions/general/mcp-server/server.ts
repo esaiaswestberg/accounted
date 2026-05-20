@@ -6258,7 +6258,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_approve_pending_operation',
-    description: 'Approve a staged pending_operation. Runs the same commit path as web-UI approval — atomic claim → executor → status update. High-risk operations require confirmed=true. Returns status=committed on success, or status=rejected/failed with error details.',
+    description: 'Commit a pending_operation. Caller must hold the pending_operations:approve scope and pass confirmed=true for risk_level=high ops (BFL 5 kap 5§ irreversible postings). Call only after the user has affirmatively confirmed the specific operation_id.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,

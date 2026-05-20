@@ -267,8 +267,19 @@ export async function GET(request: Request) {
       border: 1px solid var(--border);
       border-radius: 12px;
       padding: 2.5rem;
-      max-width: 560px;
+      max-width: 960px;
       width: 100%;
+    }
+    .scope-groups {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      column-gap: 1.5rem;
+      row-gap: 0;
+      align-items: start;
+    }
+    @media (max-width: 720px) {
+      .card { padding: 1.5rem; }
+      .scope-groups { grid-template-columns: 1fr; column-gap: 0; }
     }
     .eyebrow {
       display: inline-flex;
@@ -369,10 +380,8 @@ export async function GET(request: Request) {
       outline-offset: 2px;
     }
     .scope-group {
-      padding: 0.375rem 0;
-      border-bottom: 1px solid var(--border);
+      padding: 0.375rem 0 0.75rem;
     }
-    .scope-group:last-of-type { border-bottom: none; padding-bottom: 0; }
     .scope-group-title {
       font-size: 0.6875rem;
       font-weight: 500;
@@ -530,7 +539,7 @@ export async function GET(request: Request) {
         </div>
       </div>
 
-      ${scopeCheckboxesHtml}
+      <div class="scope-groups">${scopeCheckboxesHtml}</div>
 
       <div class="warn">
         <svg class="warn-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
