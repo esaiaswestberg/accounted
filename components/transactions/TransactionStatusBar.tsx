@@ -2,9 +2,8 @@
 
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import Link from 'next/link'
-import { Upload, Wand, Plus, CheckSquare, FileText, Lock } from 'lucide-react'
+import { Upload, Plus, CheckSquare, FileText, Lock } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { ViewMode } from './transaction-types'
 
@@ -12,10 +11,7 @@ interface TransactionStatusBarProps {
   uncategorizedCount: number
   invoiceMatchCount: number
   mode: ViewMode
-  onModeChange: (mode: ViewMode) => void
-  onOpenSwipeView: () => void
   onOpenCreateDialog: () => void
-  isLoadingSuggestions: boolean
   isBatchMode: boolean
   onToggleBatchMode: () => void
 }
@@ -24,106 +20,61 @@ export default function TransactionStatusBar({
   uncategorizedCount,
   invoiceMatchCount,
   mode,
-  onModeChange,
-  onOpenSwipeView,
   onOpenCreateDialog,
-  isLoadingSuggestions,
   isBatchMode,
   onToggleBatchMode,
 }: TransactionStatusBarProps) {
   const { canWrite } = useCanWrite()
   const t = useTranslations('transactions')
   return (
-    <div className="space-y-4">
-      {/* Header with title + actions */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">{t('page_title')}</h1>
-          {uncategorizedCount > 0 && mode === 'inbox' && (
-            <p className="text-muted-foreground mt-1">
-              <span className="text-foreground font-semibold">{uncategorizedCount}</span> {t('subtitle_to_post')}
-              {invoiceMatchCount > 0 && (
-                <span className="ml-2">
-                  · <FileText className="inline h-3.5 w-3.5 text-primary" />{' '}
-                  <span className="text-foreground font-semibold">{t('subtitle_matches', { count: invoiceMatchCount })}</span>
-                </span>
-              )}
-            </p>
-          )}
-          {mode === 'history' && (
-            <p className="text-muted-foreground">{t('history_subtitle')}</p>
-          )}
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" asChild>
-            <Link href="/import">
-              <Upload className="mr-2 h-4 w-4" />
-              {t('action_import')}
-            </Link>
-          </Button>
-          {mode === 'inbox' && uncategorizedCount > 0 && (
-            <>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={onOpenSwipeView}
-                disabled={isLoadingSuggestions}
-              >
-                <Wand className="mr-2 h-4 w-4" />
-                {isLoadingSuggestions ? t('action_review_loading') : t('action_review_all')}
-              </Button>
-              <Button
-                variant={isBatchMode ? 'default' : 'outline'}
-                size="sm"
-                onClick={onToggleBatchMode}
-              >
-                <CheckSquare className="mr-2 h-4 w-4" />
-                {isBatchMode ? t('action_select_multi_end') : t('action_select_multi_start')}
-              </Button>
-            </>
-          )}
-          <Button
-            size="sm"
-            onClick={onOpenCreateDialog}
-            disabled={!canWrite}
-            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-          >
-            {canWrite ? (
-              <Plus className="mr-2 h-4 w-4" />
-            ) : (
-              <Lock className="mr-2 h-4 w-4" />
+    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div>
+        <h1 className="font-display text-3xl md:text-4xl tracking-tight">{t('page_title')}</h1>
+        {uncategorizedCount > 0 && mode === 'inbox' && (
+          <p className="text-muted-foreground mt-1">
+            <span className="text-foreground font-semibold">{uncategorizedCount}</span> {t('subtitle_to_post')}
+            {invoiceMatchCount > 0 && (
+              <span className="ml-2">
+                · <FileText className="inline h-3.5 w-3.5 text-primary" />{' '}
+                <span className="text-foreground font-semibold">{t('subtitle_matches', { count: invoiceMatchCount })}</span>
+              </span>
             )}
-            {t('action_new_transaction')}
-          </Button>
-        </div>
+          </p>
+        )}
+        {mode === 'history' && (
+          <p className="text-muted-foreground">{t('history_subtitle')}</p>
+        )}
       </div>
 
-      {/* Mode toggle - segmented control style */}
-      <div className="inline-flex rounded-lg border bg-muted p-1">
-        <Button
-          variant={mode === 'inbox' ? 'default' : 'ghost'}
-          size="sm"
-          className="h-8 rounded-md"
-          onClick={() => onModeChange('inbox')}
-        >
-          {t('mode_inbox')}
-          {uncategorizedCount > 0 && (
-            <Badge
-              variant={mode === 'inbox' ? 'secondary' : 'outline'}
-              className="ml-2 text-xs"
-            >
-              {uncategorizedCount}
-            </Badge>
-          )}
+      <div className="flex flex-wrap gap-2">
+        <Button variant="outline" size="sm" asChild>
+          <Link href="/import">
+            <Upload className="mr-2 h-4 w-4" />
+            {t('action_import')}
+          </Link>
         </Button>
+        {mode === 'inbox' && uncategorizedCount > 0 && (
+          <Button
+            variant={isBatchMode ? 'default' : 'outline'}
+            size="sm"
+            onClick={onToggleBatchMode}
+          >
+            <CheckSquare className="mr-2 h-4 w-4" />
+            {isBatchMode ? t('action_select_multi_end') : t('action_select_multi_start')}
+          </Button>
+        )}
         <Button
-          variant={mode === 'history' ? 'default' : 'ghost'}
           size="sm"
-          className="h-8 rounded-md"
-          onClick={() => onModeChange('history')}
+          onClick={onOpenCreateDialog}
+          disabled={!canWrite}
+          title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
         >
-          {t('mode_history')}
+          {canWrite ? (
+            <Plus className="mr-2 h-4 w-4" />
+          ) : (
+            <Lock className="mr-2 h-4 w-4" />
+          )}
+          {t('action_new_transaction')}
         </Button>
       </div>
     </div>

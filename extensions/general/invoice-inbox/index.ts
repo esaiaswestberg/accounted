@@ -25,6 +25,7 @@ import { CreateSupplierInvoiceSchema, BookInboxItemDirectlySchema } from '@/lib/
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
 import { simpleParser } from 'mailparser'
+import { PDFDocument } from 'pdf-lib'
 import path from 'node:path'
 
 /**
@@ -48,6 +49,25 @@ import type { InvoiceExtractionResult, InvoiceInboxItem, SupplierInvoice, Suppli
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024
 const MAX_ATTACHMENTS_PER_EMAIL = 20
+
+// AI extraction is tuned for single-page receipts/invoices. Documents above
+// this page count tend to be sales reports, bank statements, or contracts —
+// Bedrock churns for minutes and still extracts nothing useful (issue #553).
+// Above the limit we skip extraction entirely; the document still lands in
+// the inbox and can be attached to a transaction or converted manually.
+const MAX_PAGES_FOR_AUTO_EXTRACT = 3
+
+// Returns the page count for a PDF buffer, or null if the buffer isn't a
+// parseable PDF. Errors fall through so callers can treat "unknown" the same
+// as "small enough" — preserves today's behavior on malformed inputs.
+async function countPdfPages(buffer: ArrayBuffer): Promise<number | null> {
+  try {
+    const pdf = await PDFDocument.load(buffer, { updateMetadata: false })
+    return pdf.getPageCount()
+  } catch {
+    return null
+  }
+}
 
 // Partial-update schema for the /items/:id/fields PATCH route. Only the
 // scalar fields the UI exposes for inline editing — line items and
@@ -160,12 +180,29 @@ async function uploadAndExtract(
     console.error('[invoice-inbox] Failed to append DocumentIngested:', err)
   }
 
+  // Page-count gate (issue #553): PDFs above MAX_PAGES_FOR_AUTO_EXTRACT
+  // skip extraction. Bedrock would otherwise block the upload response for
+  // minutes on a 6-page sales report and return nothing useful. Images and
+  // non-PDFs are never gated (single-page by definition). countPdfPages
+  // returns null on malformed PDFs — we treat null as "not gated" and fall
+  // through to the existing extraction path so today's behavior is preserved.
+  const pageCount =
+    file.type === 'application/pdf' ? await countPdfPages(file.buffer) : null
+  const gatedByPageCount =
+    pageCount != null && pageCount > MAX_PAGES_FOR_AUTO_EXTRACT
+  const skipExtraction = !!opts.skipExtraction || gatedByPageCount
+  const skipReason: 'too_many_pages' | 'client_opt_out' | null = gatedByPageCount
+    ? 'too_many_pages'
+    : opts.skipExtraction
+      ? 'client_opt_out'
+      : null
+
   // Bring-your-own-extraction: skip the Bedrock call entirely and seed an
   // empty extraction skeleton. The caller is expected to PUT the parsed
   // fields via /items/:id/extracted-data before converting to a supplier
   // invoice. extracted_data is never null in the DB; an empty skeleton
   // keeps downstream readers (UI, MCP) happy.
-  const { data: extracted, rawText } = opts.skipExtraction
+  const { data: extracted, rawText } = skipExtraction
     ? { data: emptyResult(), rawText: null }
     : await extractInvoiceFields({
         buffer: Buffer.from(file.buffer),
@@ -205,6 +242,7 @@ async function uploadAndExtract(
       source,
       document_id: doc.id,
       extracted_data: extracted as unknown as Record<string, unknown>,
+      extraction_skipped: skipExtraction,
       matched_supplier_id: matchedSupplierId,
       email_from: emailMeta?.from || null,
       email_subject: emailMeta?.subject || null,
@@ -236,6 +274,9 @@ async function uploadAndExtract(
         extracted_total: extracted.totals.total,
         has_org_number: extracted.supplier.orgNumber != null,
         has_ocr: extracted.invoice.paymentReference != null,
+        skipped: skipExtraction,
+        skip_reason: skipReason,
+        page_count: pageCount,
       },
       actor: { type: 'system', id: 'invoice-inbox-extract' },
       occurredAt: new Date(),
@@ -250,6 +291,9 @@ async function uploadAndExtract(
     status: inbox.status,
     extracted_data: extracted,
     matched_supplier_id: inbox.matched_supplier_id,
+    extraction_skipped: skipExtraction,
+    skip_reason: skipReason,
+    page_count: pageCount,
   }
 }
 
@@ -361,7 +405,7 @@ export const invoiceInboxExtension: Extension = {
             matched_supplier_id, document_id, email_from, email_subject,
             email_received_at, error_message, created_supplier_invoice_id,
             matched_transaction_id, created_journal_entry_id,
-            resend_email_id
+            resend_email_id, extraction_skipped
           `)
           .eq('company_id', ctx.companyId)
           .order('created_at', { ascending: false })
@@ -686,17 +730,27 @@ export const invoiceInboxExtension: Extension = {
             upload_source: 'file_upload',
           })
 
-          const { data: extracted } = await extractInvoiceFields({
-            buffer: Buffer.from(buffer),
-            mimeType: file.type,
-            fileName: file.name,
-          })
+          // Same page-count gate as /upload (issue #553) — attaching a 6-page
+          // sales report to an existing inbox row should not block on Bedrock.
+          const pageCount =
+            file.type === 'application/pdf' ? await countPdfPages(buffer) : null
+          const gatedByPageCount =
+            pageCount != null && pageCount > MAX_PAGES_FOR_AUTO_EXTRACT
+
+          const { data: extracted } = gatedByPageCount
+            ? { data: emptyResult() }
+            : await extractInvoiceFields({
+                buffer: Buffer.from(buffer),
+                mimeType: file.type,
+                fileName: file.name,
+              })
 
           const { error: linkError } = await ctx.supabase
             .from('invoice_inbox_items')
             .update({
               document_id: doc.id,
               extracted_data: extracted as unknown as Record<string, unknown>,
+              extraction_skipped: gatedByPageCount,
             })
             .eq('id', id)
             .eq('company_id', ctx.companyId)
@@ -729,7 +783,14 @@ export const invoiceInboxExtension: Extension = {
           }
 
           return NextResponse.json({
-            data: { document_id: doc.id, inbox_item_id: id, extracted_data: extracted },
+            data: {
+              document_id: doc.id,
+              inbox_item_id: id,
+              extracted_data: extracted,
+              extraction_skipped: gatedByPageCount,
+              skip_reason: gatedByPageCount ? 'too_many_pages' : null,
+              page_count: pageCount,
+            },
           })
         } catch (error) {
           console.error('[invoice-inbox/attach-document] Failed:', error)
@@ -872,6 +933,9 @@ export const invoiceInboxExtension: Extension = {
               status: 'received',
               error_message: null,
               extracted_data: extracted as unknown as Record<string, unknown>,
+              // Retry is user-initiated and bypasses the page-count gate by
+              // design — the user explicitly opted into the slow path.
+              extraction_skipped: false,
             })
             .eq('id', id)
             .eq('company_id', ctx.companyId)

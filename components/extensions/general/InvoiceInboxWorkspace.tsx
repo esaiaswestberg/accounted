@@ -50,6 +50,12 @@ interface InboxItem {
   created_supplier_invoice_id: string | null
   created_journal_entry_id: string | null
   error_message: string | null
+  // True when AI extraction was skipped — either because the upload caller
+  // passed skip_extraction=true (MCP/agent path) or because the server's
+  // page-count gate skipped a PDF above the auto-extract limit (issue #553).
+  // Distinct from status='error' (extraction failed) and from extracted_data
+  // having empty fields (extraction ran but found nothing).
+  extraction_skipped: boolean
   // Set client-side only while a manual upload is in flight. Replaced by a
   // real server-side row once the AI extraction completes.
   isPlaceholder?: boolean
@@ -353,6 +359,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       created_supplier_invoice_id: null,
       created_journal_entry_id: null,
       error_message: null,
+      extraction_skipped: false,
       isPlaceholder: true,
       fileName: file.name,
     }
@@ -371,7 +378,17 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error ?? 'Uppladdning misslyckades')
-      toast({ title: 'Dokument uppladdat', description: file.name })
+      if (json.data?.extraction_skipped) {
+        const pages = json.data?.page_count
+        toast({
+          title: 'Dokument uppladdat',
+          description: pages
+            ? `Stort dokument (${pages} sidor) — AI-tolkning skippad. Du kan koppla det till en transaktion eller skapa leverantörsfaktura manuellt.`
+            : 'AI-tolkning skippad. Du kan koppla dokumentet till en transaktion eller skapa leverantörsfaktura manuellt.',
+        })
+      } else {
+        toast({ title: 'Dokument uppladdat', description: file.name })
+      }
       setItems((prev) => prev.filter((it) => it.id !== tempId))
       await fetchItems()
       if (options.autoSelect && json.data?.inbox_item_id) {
@@ -938,6 +955,11 @@ function InboxRow({
         <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
           {isPlaceholder ? (
             <span className="italic">Tolkar dokument med AI…</span>
+          ) : item.extraction_skipped ? (
+            <span className="flex items-center gap-1.5 min-w-0">
+              <Badge variant="outline" className="font-normal">Inte AI-tolkad</Badge>
+              <span className="truncate">{timeAgo(item.email_received_at ?? item.created_at)}</span>
+            </span>
           ) : (
             <span className="truncate">{timeAgo(item.email_received_at ?? item.created_at)}</span>
           )}
@@ -1353,6 +1375,16 @@ function FieldsRail({
           Ingen leverantör matchade{' '}
           <span className="text-foreground font-medium">{extractedSupplierName}</span>
           {' — leverantören skapas när du klickar Skapa leverantörsfaktura.'}
+        </div>
+      )}
+
+      {/* Skipped-extraction hint: explains the empty fields and points the
+          user to the manual paths (transaction link or supplier invoice). */}
+      {item.extraction_skipped && !isResolved && (
+        <div className="border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
+          AI-tolkning skippades p.g.a. dokumentets storlek (fler än 3 sidor).
+          Du kan koppla dokumentet till en transaktion eller skapa
+          leverantörsfaktura manuellt.
         </div>
       )}
 

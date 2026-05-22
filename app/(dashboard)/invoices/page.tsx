@@ -5,19 +5,26 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { PageHeader } from '@/components/ui/page-header'
+import {
+  DataList,
+  DataListRow,
+  DataListPrimary,
+  DataListMeta,
+  DataListMetaSeparator,
+  DataListEmpty,
+} from '@/components/ui/data-list'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import { invoiceNumberDisplay } from '@/lib/invoices/display'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { Plus, Search, Receipt, Lock, Repeat } from 'lucide-react'
-import { EmptyInvoices, EmptyState } from '@/components/ui/empty-state'
+import { EmptyInvoices } from '@/components/ui/empty-state'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { Invoice, InvoiceStatus } from '@/types'
@@ -233,109 +240,125 @@ export default function InvoicesPage() {
         </Tabs>
       </div>
 
-      {/* Invoice list */}
-      {isLoading ? (
-        <div className="space-y-4">
-          {[1, 2, 3].map((i) => (
-            <Card key={i} className="animate-pulse">
-              <CardContent className="py-4">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-2">
-                    <div className="h-5 bg-muted rounded w-32" />
-                    <div className="h-4 bg-muted rounded w-48" />
-                  </div>
-                  <div className="h-8 bg-muted rounded w-24" />
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      ) : filteredInvoices.length === 0 ? (
-        <Card>
-          <CardContent className="p-0">
-            {searchTerm ? (
-              <EmptyState
-                icon={Receipt}
-                title={t('no_search_results_title')}
-                description={t('no_search_results_description', { term: searchTerm })}
-              />
-            ) : invoices.length === 0 ? (
-              <EmptyInvoices />
-            ) : (
-              <EmptyState
-                icon={Receipt}
-                title={t('no_category_title')}
-                description={t('no_category_description')}
-              />
-            )}
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="space-y-3">
-          {filteredInvoices.map((invoice) => {
+      <DataList>
+        {isLoading ? (
+          [1, 2, 3].map((i) => (
+            <div key={i} className="flex items-center gap-3 px-4 py-3 animate-pulse">
+              <div className="flex-1 space-y-2">
+                <div className="h-4 w-32 rounded bg-muted" />
+                <div className="h-3 w-48 rounded bg-muted" />
+              </div>
+              <div className="h-5 w-24 rounded bg-muted" />
+            </div>
+          ))
+        ) : filteredInvoices.length === 0 ? (
+          searchTerm ? (
+            <DataListEmpty
+              icon={<Receipt className="h-6 w-6" />}
+              title={t('no_search_results_title')}
+              description={t('no_search_results_description', { term: searchTerm })}
+            />
+          ) : invoices.length === 0 ? (
+            <EmptyInvoices />
+          ) : (
+            <DataListEmpty
+              icon={<Receipt className="h-6 w-6" />}
+              title={t('no_category_title')}
+              description={t('no_category_description')}
+            />
+          )
+        ) : (
+          filteredInvoices.map((invoice) => {
             const status = STATUS_CONFIG[invoice.status]
             const isCreditNote = !!invoice.credited_invoice_id
             const docType = (invoice as Invoice & { document_type?: string }).document_type || 'invoice'
             const isProforma = docType === 'proforma'
             const isDeliveryNote = docType === 'delivery_note'
             const relativeTime = invoice.due_date ? getRelativeTimeLabel(invoice.due_date, invoice.status) : null
+            const displayedTotal = getDisplayTotal(
+              { total: Number(invoice.total), currency: invoice.currency },
+              { ore_rounding: oreRounding },
+            ).displayed
             return (
-              <Link key={invoice.id} href={`/invoices/${invoice.id}`}>
-                <Card className={cn(
-                  'cursor-pointer transition-all duration-150 hover:border-primary/50 hover:bg-accent/50 hover:shadow-sm active:scale-[0.99] active:shadow-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2'
-                )}>
-                  <CardContent className="py-4">
-                    <div className="min-w-0">
-                        <div className="flex items-start sm:items-center justify-between gap-2">
-                          <p className={cn('font-medium truncate', !invoice.invoice_number && 'italic text-muted-foreground')}>{invoiceNumberDisplay(invoice.invoice_number)}</p>
-                          <p className={`font-medium tabular-nums shrink-0 ${isCreditNote ? 'text-destructive' : ''}`}>
-                            {formatCurrency(
-                              getDisplayTotal({ total: Number(invoice.total), currency: invoice.currency }, { ore_rounding: oreRounding }).displayed,
-                              invoice.currency,
-                            )}
-                          </p>
-                        </div>
-                        <p className="text-sm text-muted-foreground truncate">
-                          {(invoice.customer as { name: string })?.name} · {formatDate(invoice.invoice_date)}
-                        </p>
-                        <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-                          {isCreditNote && (
-                            <Badge variant="destructive" className="text-xs">
-                              {t('badge_credit')}
-                            </Badge>
-                          )}
-                          {isProforma && (
-                            <Badge variant="secondary" className="text-xs bg-primary/10 text-primary">
-                              {t('badge_proforma')}
-                            </Badge>
-                          )}
-                          {isDeliveryNote && (
-                            <Badge variant="secondary" className="text-xs bg-success/10 text-success">
-                              {t('badge_delivery_note')}
-                            </Badge>
-                          )}
-                          <Badge variant={status.variant as 'default' | 'secondary' | 'destructive'}>
-                            {t(status.labelKey)}
-                          </Badge>
-                          {relativeTime && (
-                            <span className={`text-xs font-medium ${relativeTime.color}`}>
-                              {relativeTime.text}
-                            </span>
-                          )}
-                        </div>
-                        {invoice.currency !== 'SEK' && invoice.total_sek && (
-                          <p className={`text-xs tabular-nums mt-0.5 ${isCreditNote ? 'text-destructive/70' : 'text-muted-foreground'}`}>
-                            {formatCurrency(Number(invoice.total_sek))}
-                          </p>
+              <Link key={invoice.id} href={`/invoices/${invoice.id}`} className="block focus:outline-none">
+                <DataListRow
+                  trailing={
+                    <div className="text-right">
+                      <p
+                        className={cn(
+                          'font-medium tabular-nums leading-none',
+                          isCreditNote && 'text-destructive'
                         )}
+                      >
+                        {formatCurrency(displayedTotal, invoice.currency)}
+                      </p>
+                      {invoice.currency !== 'SEK' && invoice.total_sek && (
+                        <p
+                          className={cn(
+                            'mt-1 text-[11px] tabular-nums',
+                            isCreditNote ? 'text-destructive/70' : 'text-muted-foreground'
+                          )}
+                        >
+                          {formatCurrency(Number(invoice.total_sek))}
+                        </p>
+                      )}
                     </div>
-                  </CardContent>
-                </Card>
+                  }
+                >
+                  <DataListPrimary className={cn(!invoice.invoice_number && 'italic text-muted-foreground')}>
+                    {invoiceNumberDisplay(invoice.invoice_number)}{' '}
+                    <span className="font-normal text-muted-foreground">
+                      · {(invoice.customer as { name: string })?.name}
+                    </span>
+                  </DataListPrimary>
+                  <DataListMeta>
+                    <span className="tabular-nums">{formatDate(invoice.invoice_date)}</span>
+                    <DataListMetaSeparator />
+                    <Badge
+                      variant={status.variant as 'default' | 'secondary' | 'destructive'}
+                      className="h-4 px-1.5 py-0 text-[10px]"
+                    >
+                      {t(status.labelKey)}
+                    </Badge>
+                    {isCreditNote && (
+                      <>
+                        <DataListMetaSeparator />
+                        <Badge variant="destructive" className="h-4 px-1.5 py-0 text-[10px]">
+                          {t('badge_credit')}
+                        </Badge>
+                      </>
+                    )}
+                    {isProforma && (
+                      <>
+                        <DataListMetaSeparator />
+                        <Badge variant="outline" className="h-4 px-1.5 py-0 text-[10px]">
+                          {t('badge_proforma')}
+                        </Badge>
+                      </>
+                    )}
+                    {isDeliveryNote && (
+                      <>
+                        <DataListMetaSeparator />
+                        <Badge variant="outline" className="h-4 px-1.5 py-0 text-[10px]">
+                          {t('badge_delivery_note')}
+                        </Badge>
+                      </>
+                    )}
+                    {relativeTime && (
+                      <>
+                        <DataListMetaSeparator />
+                        <span className={cn('font-medium', relativeTime.color)}>
+                          {relativeTime.text}
+                        </span>
+                      </>
+                    )}
+                  </DataListMeta>
+                </DataListRow>
               </Link>
             )
-          })}
-        </div>
-      )}
+          })
+        )}
+      </DataList>
     </div>
   )
 }

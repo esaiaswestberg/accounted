@@ -7,15 +7,21 @@ import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
-import { Landmark, Search, X } from 'lucide-react'
+import { DataList, DataListHeader, DataListEmpty } from '@/components/ui/data-list'
+import { Input } from '@/components/ui/input'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+} from '@/components/ui/dropdown-menu'
+import { ChevronDown, Search, Trash2, X } from 'lucide-react'
 import TransactionForm from '@/components/transactions/TransactionForm'
-import SwipeCategorizationView from '@/components/transactions/SwipeCategorizationView'
 import BatchCategorySelector from '@/components/transactions/BatchCategorySelector'
 import TransactionStatusBar from '@/components/transactions/TransactionStatusBar'
 import TransactionInboxCard from '@/components/transactions/TransactionInboxCard'
@@ -25,11 +31,11 @@ import SkattekontoInboxCard from '@/components/transactions/SkattekontoInboxCard
 import { SkattekontoMatchDialog } from '@/components/skattekonto/SkattekontoMatchDialog'
 import InvoiceMatchDialog from '@/components/transactions/InvoiceMatchDialog'
 import InvoicePicker from '@/components/transactions/InvoicePicker'
+import SupplierInvoicePicker from '@/components/transactions/SupplierInvoicePicker'
 import TransactionBookingDialog from '@/components/transactions/TransactionBookingDialog'
 import QuickReviewDialog from '@/components/transactions/QuickReviewDialog'
 
 import TemplatePicker from '@/components/transactions/TemplatePicker'
-import { EXPENSE_CATEGORIES, INCOME_CATEGORIES } from '@/components/transactions/transaction-types'
 import { getDefaultAccountForCategory, getDefaultVatTreatmentForCategory } from '@/lib/bookkeeping/category-mapping'
 import { getTemplateById, type BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import { isCounterpartyTemplateId, extractCounterpartyId } from '@/lib/bookkeeping/counterparty-templates'
@@ -42,9 +48,9 @@ import type {
 import { findBankSkvCounterparts } from '@/lib/skatteverket/bank-counterpart'
 import { useCompany } from '@/contexts/CompanyContext'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, LinePatternEntry } from '@/types'
-import type { SuggestedCategory, SuggestedTemplate } from '@/lib/transactions/category-suggestions'
+import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 
 type InvoiceWithCustomer = Invoice & { customer?: Customer }
 type SupplierInvoiceWithSupplier = SupplierInvoice & { supplier?: Supplier }
@@ -84,11 +90,9 @@ export default function TransactionsPage() {
   const [mode, setMode] = useState<ViewMode>('inbox')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
-  const [showSwipeView, setShowSwipeView] = useState(false)
-  const [categorySuggestions, setCategorySuggestions] = useState<Record<string, SuggestedCategory[]>>({})
   const [templateSuggestions, setTemplateSuggestions] = useState<Record<string, SuggestedTemplate[]>>({})
-  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false)
   const [processingId, setProcessingId] = useState<string | null>(null)
+  const [searchTerm, setSearchTerm] = useState('')
 
   // Batch mode
   const [isBatchMode, setIsBatchMode] = useState(false)
@@ -112,6 +116,9 @@ export default function TransactionsPage() {
   // Invoice picker dialog (manual match)
   const [invoicePickerOpen, setInvoicePickerOpen] = useState(false)
   const [invoicePickerTransaction, setInvoicePickerTransaction] = useState<TransactionWithInvoice | null>(null)
+  const [supplierInvoicePickerOpen, setSupplierInvoicePickerOpen] = useState(false)
+  const [supplierInvoicePickerTransaction, setSupplierInvoicePickerTransaction] = useState<TransactionWithInvoice | null>(null)
+  const [isMatchingSupplierFromPicker, setIsMatchingSupplierFromPicker] = useState(false)
   const [isMatchingFromPicker, setIsMatchingFromPicker] = useState(false)
 
   // Quick review dialog (suggestion review before booking)
@@ -177,7 +184,6 @@ export default function TransactionsPage() {
   // Source filter for the merged inbox. Defaults to 'all' so users see
   // both sources unless they want to narrow down.
   const [sourceFilter, setSourceFilter] = useState<'all' | 'bank' | 'skatteverket'>('all')
-  const [searchQuery, setSearchQuery] = useState('')
 
   const { toast } = useToast()
   const { dialogProps: deleteDialogProps, confirm: confirmDelete } = useDestructiveConfirm()
@@ -215,9 +221,18 @@ export default function TransactionsPage() {
 
   const inboxItems: InboxItem[] = (() => {
     const items: InboxItem[] = []
+    const query = searchTerm.trim().toLowerCase()
     if (sourceFilter !== 'skatteverket') {
-      for (const t of uncategorizedTransactions) {
-        items.push({ source: 'bank', date: t.date, data: t })
+      for (const tx of uncategorizedTransactions) {
+        if (
+          query &&
+          !tx.description?.toLowerCase().includes(query) &&
+          !tx.date.includes(query) &&
+          !String(tx.amount).includes(query)
+        ) {
+          continue
+        }
+        items.push({ source: 'bank', date: tx.date, data: tx })
       }
     }
     if (sourceFilter !== 'bank') {
@@ -225,32 +240,22 @@ export default function TransactionsPage() {
       for (const r of skvRows) {
         if (r.journal_entry_id) continue
         if (exitingIds.has(r.id)) continue
+        if (
+          query &&
+          !r.transaktionstext?.toLowerCase().includes(query) &&
+          !r.transaktionsdatum.includes(query) &&
+          !String(r.belopp_skatteverket).includes(query)
+        ) {
+          continue
+        }
         items.push({ source: 'skatteverket', date: r.transaktionsdatum, data: r })
       }
     }
-    const sorted = items.sort((a, b) => {
+    return items.sort((a, b) => {
       if (a.date !== b.date) return b.date.localeCompare(a.date)
       // Same date → bank first so invoice-match cards lead.
       if (a.source !== b.source) return a.source === 'bank' ? -1 : 1
       return 0
-    })
-    const query = searchQuery.trim().toLowerCase()
-    if (!query) return sorted
-    return sorted.filter(item => {
-      if (item.source === 'bank') {
-        const tx = item.data
-        return (
-          tx.description?.toLowerCase().includes(query) ||
-          tx.date.includes(query) ||
-          String(tx.amount).includes(query)
-        )
-      }
-      const r = item.data
-      return (
-        r.transaktionstext?.toLowerCase().includes(query) ||
-        r.transaktionsdatum.includes(query) ||
-        String(r.belopp_skatteverket).includes(query)
-      )
     })
   })()
   const transactionsWithMatches = transactions.filter(
@@ -393,7 +398,6 @@ export default function TransactionsPage() {
 
   async function fetchCategorySuggestions(txIds: string[]) {
     if (txIds.length === 0) return
-    setIsLoadingSuggestions(true)
     try {
       const response = await fetch('/api/transactions/suggest-categories', {
         method: 'POST',
@@ -402,16 +406,12 @@ export default function TransactionsPage() {
       })
       if (!response.ok) throw new Error('Failed to fetch suggestions')
       const data = await response.json()
-      if (data.suggestions) {
-        setCategorySuggestions(data.suggestions)
-      }
       if (data.template_suggestions) {
         setTemplateSuggestions(data.template_suggestions)
       }
     } catch {
       // Non-critical
     }
-    setIsLoadingSuggestions(false)
   }
 
   // Fetch transactions and entity type in parallel on mount, then suggestions
@@ -677,10 +677,6 @@ export default function TransactionsPage() {
       setProcessingId(null)
       return null
     }
-  }
-
-  async function handleMarkPrivate(id: string) {
-    await handleCategorize(id, false, 'private')
   }
 
   async function handleMatchSuggestedInvoice(transactionId: string, invoiceId: string) {
@@ -1043,6 +1039,76 @@ export default function TransactionsPage() {
     }
   }
 
+  async function handleSelectSupplierInvoiceFromPicker(invoice: SupplierInvoice & { supplier?: Supplier }) {
+    if (!supplierInvoicePickerTransaction) return
+    const tx = supplierInvoicePickerTransaction
+    setIsMatchingSupplierFromPicker(true)
+    try {
+      const response = await fetch(`/api/transactions/${tx.id}/match-supplier-invoice`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ supplier_invoice_id: invoice.id }),
+      })
+      const result = await response.json()
+      if (!response.ok) {
+        toast({
+          title: 'Matchning misslyckades',
+          description: getErrorMessage(result, { context: 'transaction' }),
+          variant: 'destructive',
+        })
+        setIsMatchingSupplierFromPicker(false)
+        return
+      }
+
+      toast({
+        title: 'Leverantörsfaktura matchad',
+        description: `Faktura ${invoice.supplier_invoice_number ?? ''} markerad som betald`,
+      })
+
+      setSupplierInvoicePickerOpen(false)
+      setSupplierInvoicePickerTransaction(null)
+      setExitingIds((prev) => new Set(prev).add(tx.id))
+      setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
+      setTimeout(() => {
+        setTransactions((prev) =>
+          prev.map((t) =>
+            t.id === tx.id
+              ? {
+                  ...t,
+                  supplier_invoice_id: invoice.id,
+                  is_business: true,
+                  journal_entry_id: result.journal_entry_id ?? t.journal_entry_id,
+                }
+              : t
+          )
+        )
+        setExitingIds((prev) => {
+          const next = new Set(prev)
+          next.delete(tx.id)
+          return next
+        })
+        setIsMatchingSupplierFromPicker(false)
+      }, 350)
+    } catch {
+      toast({
+        title: 'Matchning misslyckades',
+        description: 'Transaktionen kunde inte matchas med leverantörsfakturan. Försök igen.',
+        variant: 'destructive',
+      })
+      setIsMatchingSupplierFromPicker(false)
+    }
+  }
+
+  function openInvoiceMatchPicker(transaction: TransactionWithInvoice) {
+    if (transaction.amount >= 0) {
+      setInvoicePickerTransaction(transaction)
+      setInvoicePickerOpen(true)
+    } else {
+      setSupplierInvoicePickerTransaction(transaction)
+      setSupplierInvoicePickerOpen(true)
+    }
+  }
+
   async function handleCreateTransaction(data: CreateTransactionInput) {
     setIsCreating(true)
     const { data: { user } } = await supabase.auth.getUser()
@@ -1192,15 +1258,46 @@ export default function TransactionsPage() {
     setSelectedIds(new Set())
   }
 
-  async function handleBatchMarkPrivate() {
+  async function handleBatchDelete() {
     const ids = Array.from(selectedIds)
+    const ok = await confirmDelete({
+      title: `Ta bort ${ids.length} transaktioner?`,
+      description: 'Åtgärden kan inte ångras.',
+      confirmLabel: 'Ta bort',
+      variant: 'destructive',
+    })
+    if (!ok) return
+
     setBatchProgress({ done: 0, total: ids.length })
+    let successes = 0
+    const failures: string[] = []
     for (let i = 0; i < ids.length; i++) {
-      await handleCategorize(ids[i], false, 'private')
+      try {
+        const response = await fetch(`/api/transactions/${ids[i]}`, { method: 'DELETE' })
+        if (response.ok) {
+          successes++
+        } else {
+          const tx = transactions.find((t) => t.id === ids[i])
+          failures.push(tx?.description || ids[i])
+        }
+      } catch {
+        failures.push(ids[i])
+      }
       setBatchProgress({ done: i + 1, total: ids.length })
     }
+    if (successes > 0) {
+      setTransactions((prev) => prev.filter((t) => !selectedIds.has(t.id) || failures.includes(t.description)))
+    }
     setBatchProgress(null)
-    toast({ title: 'Klart', description: `${ids.length} transaktioner markerade som privat` })
+    if (failures.length === 0) {
+      toast({ title: 'Klart', description: `${successes} transaktioner borttagna` })
+    } else {
+      toast({
+        title: 'Delvis klart',
+        description: `${successes} borttagna, ${failures.length} misslyckades`,
+        variant: 'destructive',
+      })
+    }
     exitBatchMode()
   }
 
@@ -1233,22 +1330,6 @@ export default function TransactionsPage() {
     exitBatchMode()
   }
 
-  async function openSwipeView() {
-    try {
-      // Match invoices to transactions
-      await fetch('/api/transactions/batch-match-invoices', { method: 'POST' })
-        .then((r) => r.json())
-        .then((data) => {
-          if (data.matched > 0) fetchTransactions()
-        })
-    } catch {
-      // Non-critical
-    }
-    const uncatIds = uncategorizedTransactions.map((t) => t.id)
-    await fetchCategorySuggestions(uncatIds)
-    setShowSwipeView(true)
-  }
-
   function openMatchDialog(transaction: TransactionWithInvoice) {
     setSelectedTransaction(transaction)
     setMatchDialogOpen(true)
@@ -1257,13 +1338,6 @@ export default function TransactionsPage() {
   function openCategoryDialog(transaction: TransactionWithInvoice) {
     setTemplatePickerTransaction(transaction)
     setTemplatePickerOpen(true)
-  }
-
-  function handleOpenQuickReview(transaction: TransactionWithInvoice, suggestion: SuggestedCategory) {
-    const allCategories = [...EXPENSE_CATEGORIES, ...INCOME_CATEGORIES]
-    const label = allCategories.find((c) => c.value === suggestion.category)?.label || suggestion.label
-    setQuickReview({ transaction, category: suggestion.category, label, template: null, templateId: undefined, linePattern: null })
-    setQuickReviewOpen(true)
   }
 
   function handleTemplateSelected(template: BookingTemplate) {
@@ -1428,158 +1502,149 @@ export default function TransactionsPage() {
     return journalEntryId
   }
 
-  // Swipe view
-  if (showSwipeView && uncategorizedTransactions.length > 0) {
-    return (
-      <SwipeCategorizationView
-        transactions={uncategorizedTransactions}
-        suggestions={categorySuggestions}
-        templateSuggestions={templateSuggestions}
-        onCategorize={handleCategorize}
-        onMatchInvoice={handleMatchInvoice}
-        onClose={() => setShowSwipeView(false)}
-        entityType={entityType as EntityType}
-      />
-    )
-  }
-
   return (
     <div className="space-y-6">
-      {/* Status bar with mode toggle */}
+      {/* Status bar */}
       <TransactionStatusBar
         uncategorizedCount={totalUncategorizedCount ?? uncategorizedTransactions.length}
         invoiceMatchCount={transactionsWithMatches.length}
         mode={mode}
-        onModeChange={setMode}
-        onOpenSwipeView={openSwipeView}
         onOpenCreateDialog={() => setIsDialogOpen(true)}
-        isLoadingSuggestions={isLoadingSuggestions}
         isBatchMode={isBatchMode}
         onToggleBatchMode={() => (isBatchMode ? exitBatchMode() : setIsBatchMode(true))}
       />
 
+      {/* Search + view dropdown */}
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Sök transaktioner…"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="h-9 pl-10"
+          />
+        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" className="h-9 gap-1.5 px-3 text-sm">
+              {mode === 'inbox'
+                ? `Att bokföra${(totalUncategorizedCount ?? uncategorizedTransactions.length) > 0 ? ` (${totalUncategorizedCount ?? uncategorizedTransactions.length})` : ''}`
+                : 'Alla transaktioner'}
+              <ChevronDown className="h-3.5 w-3.5 opacity-50" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-[14rem]">
+            <DropdownMenuRadioGroup value={mode} onValueChange={(v) => setMode(v as typeof mode)}>
+              <DropdownMenuRadioItem value="inbox">
+                {`Att bokföra${(totalUncategorizedCount ?? uncategorizedTransactions.length) > 0 ? ` (${totalUncategorizedCount ?? uncategorizedTransactions.length})` : ''}`}
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="history">Alla transaktioner</DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
       {/* Content based on mode */}
       {isLoading ? (
-        <div className="space-y-3">
+        <DataList>
           {[1, 2, 3].map((i) => (
-            <Card key={i} className="animate-pulse">
-              <CardContent className="py-4">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-2">
-                    <div className="h-5 bg-muted rounded w-48" />
-                    <div className="h-4 bg-muted rounded w-24" />
-                  </div>
-                  <div className="h-6 bg-muted rounded w-20" />
-                </div>
-              </CardContent>
-            </Card>
+            <div key={i} className="flex items-center gap-3 px-4 py-3 animate-pulse">
+              <div className="h-5 w-5 rounded bg-muted" />
+              <div className="flex-1 space-y-2">
+                <div className="h-4 w-48 rounded bg-muted" />
+                <div className="h-3 w-24 rounded bg-muted" />
+              </div>
+              <div className="h-5 w-20 rounded bg-muted" />
+            </div>
           ))}
-        </div>
+        </DataList>
       ) : mode === 'inbox' ? (
-        uncategorizedTransactions.length === 0 && skvUnmatched.length === 0 ? (
+        inboxItems.length === 0 && !searchTerm ? (
           <InboxZeroState
             hasTransactions={transactions.length > 0 || skvRows.length > 0}
             onCreateTransaction={() => setIsDialogOpen(true)}
           />
         ) : (
-          <div className="space-y-3">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                type="search"
-                placeholder={t('search_placeholder')}
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-10"
-              />
-            </div>
-            {/* Source filter — only render when both sources have content
-                to filter between, otherwise it'd be a no-op chip row. */}
+          <DataList>
             {skvUnmatched.length > 0 && uncategorizedTransactions.length > 0 && (
-              <div className="flex items-center gap-2 text-xs">
-                <span className="text-muted-foreground">{t('source_label')}</span>
-                <button
-                  onClick={() => setSourceFilter('all')}
-                  className={cn(
-                    'rounded-full border px-3 py-1 transition-colors',
-                    sourceFilter === 'all'
-                      ? 'border-foreground bg-foreground text-background'
-                      : 'border-border text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  {t('source_all', { count: uncategorizedTransactions.length + skvUnmatched.length })}
-                </button>
-                <button
-                  onClick={() => setSourceFilter('bank')}
-                  className={cn(
-                    'rounded-full border px-3 py-1 transition-colors',
-                    sourceFilter === 'bank'
-                      ? 'border-foreground bg-foreground text-background'
-                      : 'border-border text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  {t('source_bank', { count: uncategorizedTransactions.length })}
-                </button>
-                <button
-                  onClick={() => setSourceFilter('skatteverket')}
-                  className={cn(
-                    'flex items-center gap-1 rounded-full border px-3 py-1 transition-colors',
-                    sourceFilter === 'skatteverket'
-                      ? 'border-foreground bg-foreground text-background'
-                      : 'border-border text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  <Landmark className="h-3 w-3" />
-                  {t('source_skatteverket', { count: skvUnmatched.length })}
-                </button>
-              </div>
+              <DataListHeader>
+                <span className="text-xs uppercase tracking-wider text-muted-foreground">
+                  {t('source_label')}
+                </span>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" className="h-7 gap-1.5 px-2 text-xs">
+                      {sourceFilter === 'all'
+                        ? t('source_all', { count: uncategorizedTransactions.length + skvUnmatched.length })
+                        : sourceFilter === 'bank'
+                          ? t('source_bank', { count: uncategorizedTransactions.length })
+                          : t('source_skatteverket', { count: skvUnmatched.length })}
+                      <ChevronDown className="h-3 w-3 opacity-50" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="min-w-[12rem]">
+                    <DropdownMenuRadioGroup
+                      value={sourceFilter}
+                      onValueChange={(v) => setSourceFilter(v as typeof sourceFilter)}
+                    >
+                      <DropdownMenuRadioItem value="all">
+                        {t('source_all', { count: uncategorizedTransactions.length + skvUnmatched.length })}
+                      </DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="bank">
+                        {t('source_bank', { count: uncategorizedTransactions.length })}
+                      </DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="skatteverket">
+                        {t('source_skatteverket', { count: skvUnmatched.length })}
+                      </DropdownMenuRadioItem>
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </DataListHeader>
             )}
-            {inboxItems.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-8 text-center">
-                {t('no_search_results')}
-              </p>
-            ) : (
-              <AnimatePresence mode="popLayout">
-                {inboxItems.map(item =>
-                  item.source === 'bank' ? (
-                    <TransactionInboxCard
-                      key={`bank-${item.data.id}`}
-                      transaction={item.data}
-                      suggestions={categorySuggestions[item.data.id]}
-                      templateSuggestions={templateSuggestions[item.data.id]}
-                      skvCounterpartDate={bankToSkvHints.get(item.data.id)}
-                      processingId={processingId}
-                      isBatchMode={isBatchMode}
-                      isSelected={selectedIds.has(item.data.id)}
-                      entityType={entityType}
-                      onCategorize={handleCategorize}
-                      onMarkPrivate={handleMarkPrivate}
-                      onOpenMatchDialog={openMatchDialog}
-                      onOpenCategoryDialog={openCategoryDialog}
-                      onDelete={handleDeleteTransaction}
-                      onOpenQuickReview={handleOpenQuickReview}
-                      onOpenTemplateReview={handleOpenTemplateReview}
-                      onToggleSelect={toggleBatchSelect}
-                    />
-                  ) : (
-                    <SkattekontoInboxCard
-                      key={`skv-${item.data.id}`}
-                      row={item.data}
-                      matchSuggestion={item.data.match_suggestion}
-                      processing={skvProcessingId === item.data.id}
-                      onBokfor={handleSkvBokfor}
-                      onMatch={r => setSkvMatchTarget(r)}
-                    />
-                  ),
-                )}
-              </AnimatePresence>
-            )}
-          </div>
+            {inboxItems.length === 0 && searchTerm ? (
+              <DataListEmpty
+                title="Inga träffar"
+                description={t('no_search_results')}
+              />
+            ) : null}
+            <AnimatePresence mode="popLayout">
+              {inboxItems.map(item =>
+                item.source === 'bank' ? (
+                  <TransactionInboxCard
+                    key={`bank-${item.data.id}`}
+                    transaction={item.data}
+                    skvCounterpartDate={bankToSkvHints.get(item.data.id)}
+                    processingId={processingId}
+                    isBatchMode={isBatchMode}
+                    isSelected={selectedIds.has(item.data.id)}
+                    entityType={entityType}
+                    onCategorize={handleCategorize}
+                    onOpenMatchDialog={openMatchDialog}
+                    onOpenMatchInvoicePicker={openInvoiceMatchPicker}
+                    onOpenCategoryDialog={openCategoryDialog}
+                    onDelete={handleDeleteTransaction}
+                    onToggleSelect={toggleBatchSelect}
+                  />
+                ) : (
+                  <SkattekontoInboxCard
+                    key={`skv-${item.data.id}`}
+                    row={item.data}
+                    matchSuggestion={item.data.match_suggestion}
+                    processing={skvProcessingId === item.data.id}
+                    onBokfor={handleSkvBokfor}
+                    onMatch={r => setSkvMatchTarget(r)}
+                  />
+                ),
+              )}
+            </AnimatePresence>
+          </DataList>
         )
       ) : (
         <TransactionHistoryList
           transactions={transactions}
           skvRows={skvRows}
+          searchTerm={searchTerm}
           onOpenMatchDialog={openMatchDialog}
           onOpenCategoryDialog={openCategoryDialog}
           onDelete={handleDeleteTransaction}
@@ -1610,8 +1675,14 @@ export default function TransactionsPage() {
                 <X className="mr-1 h-3 w-3" />
                 Avmarkera
               </Button>
-              <Button variant="outline" size="sm" onClick={handleBatchMarkPrivate}>
-                Markera som privat
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleBatchDelete}
+                className="text-destructive hover:text-destructive"
+              >
+                <Trash2 className="mr-1 h-3 w-3" />
+                Ta bort
               </Button>
               <Button size="sm" onClick={() => setShowBatchSelector(true)}>
                 Bokför
@@ -1649,7 +1720,7 @@ export default function TransactionsPage() {
       <Dialog open={templatePickerOpen} onOpenChange={setTemplatePickerOpen}>
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{t('dialog_choose_template')}</DialogTitle>
+            <DialogTitle>Bokför transaktion</DialogTitle>
           </DialogHeader>
           {templatePickerTransaction && (
             <div className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
@@ -1659,6 +1730,31 @@ export default function TransactionsPage() {
               </span>
             </div>
           )}
+          <div className="space-y-1">
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full justify-start"
+              onClick={handleManualBooking}
+            >
+              Bokför manuellt…
+            </Button>
+            {templatePickerTransaction && templatePickerTransaction.amount > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full justify-start"
+                onClick={() => {
+                  const tx = templatePickerTransaction
+                  setTemplatePickerOpen(false)
+                  setInvoicePickerTransaction(tx)
+                  setInvoicePickerOpen(true)
+                }}
+              >
+                Matcha med faktura…
+              </Button>
+            )}
+          </div>
           <TemplatePicker
             direction={templatePickerTransaction && templatePickerTransaction.amount < 0 ? 'expense' : 'income'}
             entityType={entityType as EntityType}
@@ -1670,26 +1766,6 @@ export default function TransactionsPage() {
               handleOpenTemplateReview(templatePickerTransaction, templateId)
             }}
           />
-          <div className="pt-2 border-t space-y-1">
-            {templatePickerTransaction && templatePickerTransaction.amount > 0 && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full text-muted-foreground"
-                onClick={() => {
-                  const tx = templatePickerTransaction
-                  setTemplatePickerOpen(false)
-                  setInvoicePickerTransaction(tx)
-                  setInvoicePickerOpen(true)
-                }}
-              >
-                Matcha med faktura...
-              </Button>
-            )}
-            <Button variant="ghost" size="sm" className="w-full text-muted-foreground" onClick={handleManualBooking}>
-              Ange konton manuellt...
-            </Button>
-          </div>
         </DialogContent>
       </Dialog>
 
@@ -1717,6 +1793,36 @@ export default function TransactionsPage() {
                 transaction={invoicePickerTransaction}
                 onSelect={handleSelectInvoiceFromPicker}
                 isProcessing={isMatchingFromPicker}
+              />
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={supplierInvoicePickerOpen}
+        onOpenChange={(open) => {
+          if (isMatchingSupplierFromPicker) return
+          setSupplierInvoicePickerOpen(open)
+          if (!open) setSupplierInvoicePickerTransaction(null)
+        }}
+      >
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Matcha med leverantörsfaktura</DialogTitle>
+          </DialogHeader>
+          {supplierInvoicePickerTransaction && (
+            <>
+              <div className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
+                <span className="truncate text-muted-foreground">{supplierInvoicePickerTransaction.description}</span>
+                <span className="font-medium tabular-nums flex-shrink-0 ml-3">
+                  {formatCurrency(supplierInvoicePickerTransaction.amount, supplierInvoicePickerTransaction.currency)}
+                </span>
+              </div>
+              <SupplierInvoicePicker
+                transaction={supplierInvoicePickerTransaction}
+                onSelect={handleSelectSupplierInvoiceFromPicker}
+                isProcessing={isMatchingSupplierFromPicker}
               />
             </>
           )}
