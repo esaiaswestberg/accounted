@@ -2680,7 +2680,11 @@
     "open_in_new_tab": "Open in new tab",
     "not_previewable": "Preview is not available for this file type.",
     "remove": "Remove",
-    "replace": "Replace with new version"
+    "replace": "Replace with new version",
+    "corrupt_title": "File appears to be corrupt",
+    "corrupt_body": "The file cannot be read as a PDF. Upload a new version to replace it — the old one is kept in the version history.",
+    "corrupt_replace_cta": "Upload new version",
+    "integrity_unknown": "File integrity could not be verified — try again later if the preview does not appear."
   },
   "journal_attachments": {
     "loading": "Loading documents...",

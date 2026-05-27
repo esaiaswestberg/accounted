@@ -2680,7 +2680,11 @@
     "open_in_new_tab": "Öppna i nytt fönster",
     "not_previewable": "Förhandsvisning är inte tillgänglig för denna filtyp.",
     "remove": "Ta bort",
-    "replace": "Ersätt med ny version"
+    "replace": "Ersätt med ny version",
+    "corrupt_title": "Filen verkar vara skadad",
+    "corrupt_body": "Filen kan inte läsas som PDF. Ladda upp en ny version så ersätter den den trasiga — den gamla bevaras i versionshistoriken.",
+    "corrupt_replace_cta": "Ladda upp ny version",
+    "integrity_unknown": "Filens integritet kunde inte verifieras — försök igen senare om förhandsgranskningen inte visas."
   },
   "journal_attachments": {
     "loading": "Laddar underlag...",

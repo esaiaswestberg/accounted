@@ -770,6 +770,11 @@ const YEAR_END: Record<string, StructuredErrorEntry> = {
     message_sv: 'Resultaträkningens debet och kredit balanserar inte. Granska verifikationerna innan bokslut.',
     message_en: 'Trial balance does not balance.',
   },
+  YEAR_END_NEXT_PERIOD_HAS_IB: {
+    httpStatus: 400,
+    message_sv: 'Nästa räkenskapsperiod har redan ingående balanser bokförda. Storno dem innan du kör om bokslutet.',
+    message_en: 'Next fiscal period already has opening balances posted; reverse them before re-running year-end.',
+  },
 }
 
 const OPENING_BAL: Record<string, StructuredErrorEntry> = {
