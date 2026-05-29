@@ -508,6 +508,16 @@ export const LinkInvoiceToVoucherSchema = z.object({
   notes: z.string().max(2000).optional(),
 })
 
+/**
+ * Supplier-invoice mirror: link an existing posted verifikat as payment for a
+ * supplier invoice. No new JE — only a supplier_invoice_payments row pointing
+ * at the supplied journal_entry_id, plus the invoice's paid/remaining advance.
+ */
+export const LinkSupplierInvoiceToVoucherSchema = z.object({
+  journal_entry_id: uuid,
+  notes: z.string().max(2000).optional(),
+})
+
 export const LinkTransactionJournalEntrySchema = z.object({
   journal_entry_id: uuid,
   // Optional invoice to settle alongside the link. When provided, the

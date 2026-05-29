@@ -81,6 +81,27 @@ export const POST = withRouteContext(
 
     const txAmountAbs = Math.abs(transaction.amount)
 
+    // Overshoot guard for the same-currency branch. The legacy code path used
+    // txAmountAbs wholesale and would push supplier_invoices.paid_amount past
+    // invoice.total whenever the bank transaction was larger than what was
+    // owed. Reject and direct the user at the split-payment flow which can
+    // allocate the excess to additional supplier invoices.
+    // FX branch (currency mismatch) is already clamped below to
+    // invoice.remaining_amount, so it cannot overshoot.
+    if (
+      transaction.currency === invoice.currency &&
+      txAmountAbs > invoice.remaining_amount + 0.005
+    ) {
+      return errorResponseFromCode('MATCH_SI_AMOUNT_EXCEEDS_REMAINING', txLog, {
+        requestId,
+        details: {
+          transaction_amount: txAmountAbs,
+          remaining_amount: Math.round(invoice.remaining_amount * 100) / 100,
+          excess: Math.round((txAmountAbs - invoice.remaining_amount) * 100) / 100,
+        },
+      })
+    }
+
     // Amount in the *invoice's* currency — used to update
     // supplier_invoices.paid_amount/remaining_amount and the
     // supplier_invoice_payments row (whose `currency` is the invoice's).

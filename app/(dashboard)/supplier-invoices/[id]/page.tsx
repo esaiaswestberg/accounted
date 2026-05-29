@@ -10,10 +10,12 @@ import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { ArrowLeft, CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Info } from 'lucide-react'
 import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
+import LinkVoucherPicker from '@/components/invoices/LinkVoucherPicker'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatDate } from '@/lib/utils'
 import Link from 'next/link'
@@ -45,6 +47,7 @@ export default function SupplierInvoiceDetailPage() {
   const [invoice, setInvoice] = useState<SupplierInvoice | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isPayDialogOpen, setIsPayDialogOpen] = useState(false)
+  const [payTab, setPayTab] = useState<'new' | 'existing'>('new')
   const [payAmount, setPayAmount] = useState('')
   const [paymentDate, setPaymentDate] = useState(() => new Date().toISOString().split('T')[0])
   const [isProcessing, setIsProcessing] = useState(false)
@@ -586,45 +589,72 @@ export default function SupplierInvoiceDetailPage() {
       <DestructiveConfirmDialog {...confirmDialogProps} />
 
       {/* Pay Dialog */}
-      <Dialog open={isPayDialogOpen} onOpenChange={setIsPayDialogOpen}>
+      <Dialog
+        open={isPayDialogOpen}
+        onOpenChange={(open) => {
+          setIsPayDialogOpen(open)
+          if (!open) setPayTab('new')
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{t('pay_dialog_title')}</DialogTitle>
           </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="payment-date">{t('payment_date_label')}</Label>
-              <Input
-                id="payment-date"
-                type="date"
-                value={paymentDate}
-                max={new Date().toISOString().split('T')[0]}
-                onChange={(e) => setPaymentDate(e.target.value)}
-                className="w-full sm:w-48"
+          <Tabs value={payTab} onValueChange={(v) => setPayTab(v as 'new' | 'existing')}>
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="new">{t('tab_new_payment')}</TabsTrigger>
+              <TabsTrigger value="existing">{t('tab_existing_voucher')}</TabsTrigger>
+            </TabsList>
+            <TabsContent value="new" className="mt-4">
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="payment-date">{t('payment_date_label')}</Label>
+                  <Input
+                    id="payment-date"
+                    type="date"
+                    value={paymentDate}
+                    max={new Date().toISOString().split('T')[0]}
+                    onChange={(e) => setPaymentDate(e.target.value)}
+                    className="w-full sm:w-48"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="payment-amount">{t('payment_amount_label')}</Label>
+                  <Input
+                    id="payment-amount"
+                    type="number"
+                    step="0.01"
+                    value={payAmount}
+                    onChange={(e) => setPayAmount(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {t('remaining_to_pay', { amount: formatAmount(invoice.remaining_amount), currency: invoice.currency })}
+                  </p>
+                </div>
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" onClick={() => setIsPayDialogOpen(false)}>
+                    {t('cancel')}
+                  </Button>
+                  <Button onClick={() => handleMarkPaid(false)} disabled={isProcessing}>
+                    {isProcessing ? t('processing') : t('register_payment')}
+                  </Button>
+                </div>
+              </div>
+            </TabsContent>
+            <TabsContent value="existing" className="mt-4">
+              <LinkVoucherPicker
+                mode="supplier_invoice"
+                invoiceId={invoice.id}
+                invoiceCurrency={invoice.currency}
+                onLinked={() => {
+                  setIsPayDialogOpen(false)
+                  setPayTab('new')
+                  fetchInvoice()
+                }}
+                onCancel={() => setPayTab('new')}
               />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="payment-amount">{t('payment_amount_label')}</Label>
-              <Input
-                id="payment-amount"
-                type="number"
-                step="0.01"
-                value={payAmount}
-                onChange={(e) => setPayAmount(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">
-                {t('remaining_to_pay', { amount: formatAmount(invoice.remaining_amount), currency: invoice.currency })}
-              </p>
-            </div>
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setIsPayDialogOpen(false)}>
-                {t('cancel')}
-              </Button>
-              <Button onClick={() => handleMarkPaid(false)} disabled={isProcessing}>
-                {isProcessing ? t('processing') : t('register_payment')}
-              </Button>
-            </div>
-          </div>
+            </TabsContent>
+          </Tabs>
         </DialogContent>
       </Dialog>
 

@@ -2589,6 +2589,8 @@
     "payment_voucher": "Payment verifikat",
     "notes_title": "Notes",
     "pay_dialog_title": "Mark as paid",
+    "tab_new_payment": "New payment",
+    "tab_existing_voucher": "Existing voucher",
     "payment_date_label": "Payment date",
     "payment_amount_label": "Amount to pay",
     "remaining_to_pay": "Remaining to pay: {amount} {currency}",

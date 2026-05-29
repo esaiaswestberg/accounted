@@ -219,8 +219,25 @@ export const POST = withRouteContext(
     const now = new Date().toISOString()
     const paidAmount = transaction.amount
 
-    const newPaidAmount = Math.round(((invoice.paid_amount || 0) + paidAmount) * 100) / 100
     const currentRemaining = invoice.remaining_amount ?? (invoice.total - (invoice.paid_amount || 0))
+
+    // Overshoot guard: the single-tx match endpoint always books tx.amount in
+    // full against the invoice. If tx > remaining the legacy code path would
+    // push invoice.paid_amount past invoice.total — silently. Reject and
+    // point the user at the split-payment flow which can allocate the excess
+    // across additional invoices.
+    if (paidAmount > currentRemaining + 0.005) {
+      return errorResponseFromCode('MATCH_AMOUNT_EXCEEDS_REMAINING', txLog, {
+        requestId,
+        details: {
+          transaction_amount: paidAmount,
+          remaining_amount: Math.round(currentRemaining * 100) / 100,
+          excess: Math.round((paidAmount - currentRemaining) * 100) / 100,
+        },
+      })
+    }
+
+    const newPaidAmount = Math.round(((invoice.paid_amount || 0) + paidAmount) * 100) / 100
     const newRemaining = Math.max(0, Math.round((currentRemaining - paidAmount) * 100) / 100)
     const isFullyPaid = newRemaining <= 0
     const newStatus = isFullyPaid ? 'paid' : 'partially_paid'

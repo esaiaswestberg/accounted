@@ -2589,6 +2589,8 @@
     "payment_voucher": "Betalningsverifikation",
     "notes_title": "Anteckningar",
     "pay_dialog_title": "Markera som betald",
+    "tab_new_payment": "Ny betalning",
+    "tab_existing_voucher": "Befintlig verifikation",
     "payment_date_label": "Betalningsdatum",
     "payment_amount_label": "Belopp att betala",
     "remaining_to_pay": "Kvar att betala: {amount} {currency}",

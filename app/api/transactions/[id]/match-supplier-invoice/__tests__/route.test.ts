@@ -195,4 +195,56 @@ describe('POST /api/transactions/[id]/match-supplier-invoice — non-FX paths', 
     expect(body.paid_amount).toBe(1000)
     expect(body.remaining_amount).toBe(0)
   })
+
+  it('returns 400 MATCH_SI_AMOUNT_EXCEEDS_REMAINING when tx exceeds invoice remaining (same currency)', async () => {
+    // Tx pays out 6 000 SEK, invoice has 5 000 SEK remaining. Legacy code path
+    // would push paid_amount past invoice.total. The new guard rejects so the
+    // user routes the excess through the split-payment flow.
+    enqueue({
+      data: {
+        id: TX_UUID,
+        company_id: 'company-1',
+        amount: -6000,
+        currency: 'SEK',
+        amount_sek: null,
+        supplier_invoice_id: null,
+        date: '2026-05-12',
+      },
+      error: null,
+    })
+    enqueue({
+      data: {
+        id: SI_UUID,
+        currency: 'SEK',
+        exchange_rate: null,
+        status: 'registered',
+        remaining_amount: 5000,
+        paid_amount: 0,
+        supplier: { supplier_type: 'swedish_business' },
+        items: [],
+      },
+      error: null,
+    })
+
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{ error: unknown }>(res)
+    expect(status).toBe(400)
+    expect((body.error as { code: string }).code).toBe('MATCH_SI_AMOUNT_EXCEEDS_REMAINING')
+    const details = (body.error as { details: Record<string, number> }).details
+    expect(details.transaction_amount).toBe(6000)
+    expect(details.remaining_amount).toBe(5000)
+    expect(details.excess).toBe(1000)
+  })
+
+  it('does NOT trigger overshoot guard on currency mismatch (FX path clamps to remaining)', async () => {
+    // SEK transaction paying a EUR invoice. The currency-mismatch branch
+    // collapses paymentAmountInvoiceCurrency to invoice.remaining_amount and
+    // cannot overshoot, so the guard must not fire here.
+    enqueueHappyPath({
+      transaction: { amount: -10000, currency: 'SEK' },
+      invoice: { currency: 'EUR', remaining_amount: 200, exchange_rate: 11.5 },
+    })
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    expect(res.status).toBe(200)
+  })
 })

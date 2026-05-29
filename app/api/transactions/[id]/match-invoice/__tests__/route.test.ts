@@ -393,6 +393,40 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(body.remaining_amount).toBe(7500)
   })
 
+  it('returns 400 MATCH_AMOUNT_EXCEEDS_REMAINING when tx amount exceeds invoice remaining', async () => {
+    // Tx is +12 000 SEK, invoice has 5 000 SEK remaining. Legacy code path
+    // would push paid_amount past invoice.total; the new guard rejects so
+    // the user routes the excess through the split-payment flow.
+    const tx = makeTransaction({ id: 'tx-1', amount: 12000, invoice_id: null, date: '2024-06-15' })
+    const invoice = makeInvoice({
+      id: VALID_UUID,
+      status: 'partially_paid',
+      total: 10000,
+      remaining_amount: 5000,
+      paid_amount: 5000,
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: invoice, error: null })
+    // Hard-duplicate check is skipped for partially_paid status — no enqueue needed.
+
+    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+      method: 'POST',
+      body: { invoice_id: VALID_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ error: unknown }>(response)
+
+    expect(status).toBe(400)
+    expect((body.error as unknown as { code: string }).code).toBe(
+      'MATCH_AMOUNT_EXCEEDS_REMAINING',
+    )
+    const details = (body.error as unknown as { details: Record<string, number> }).details
+    expect(details.transaction_amount).toBe(12000)
+    expect(details.remaining_amount).toBe(5000)
+    expect(details.excess).toBe(7000)
+  })
+
   it('cash method partial payment uses clearing entry with note', async () => {
     const tx = makeTransaction({ id: 'tx-1', amount: 5000, invoice_id: null, date: '2024-06-15' })
     const invoice = makeInvoice({

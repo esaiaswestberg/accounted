@@ -394,6 +394,13 @@ const MATCH_INVOICE: Record<string, StructuredErrorEntry> = {
     message_en:
       'The candidate journal entry echoed in expected_journal_entry_id does not match the one detected at request time. Re-run the duplicate-payment pre-flight to obtain the current candidate, then retry.',
   },
+  MATCH_AMOUNT_EXCEEDS_REMAINING: {
+    httpStatus: 400,
+    message_sv:
+      'Transaktionsbeloppet är större än fakturans återstående belopp. Dela betalningen och fördela överskottet på en eller flera andra fakturor.',
+    message_en:
+      'Transaction amount exceeds the invoice remaining amount. Use the split-payment flow to allocate the excess across one or more other invoices.',
+  },
 }
 
 const LINK_TX_JE: Record<string, StructuredErrorEntry> = {
@@ -478,6 +485,13 @@ const MATCH_SI: Record<string, StructuredErrorEntry> = {
       'Kontantmetoden stödjer inte valutakursdifferenser. Byt till löpande bokföring eller bokför valutakursdifferensen manuellt.',
     message_en:
       'Cash accounting does not support exchange-rate differences. Switch to accrual or book the FX difference manually.',
+  },
+  MATCH_SI_AMOUNT_EXCEEDS_REMAINING: {
+    httpStatus: 400,
+    message_sv:
+      'Transaktionsbeloppet är större än leverantörsfakturans återstående belopp. Dela betalningen och fördela överskottet på en eller flera andra leverantörsfakturor.',
+    message_en:
+      'Transaction amount exceeds the supplier invoice remaining amount. Use the split-payment flow to allocate the excess across one or more other supplier invoices.',
   },
   TX_UNCATEGORIZE_NOT_BOOKED: {
     httpStatus: 400,
@@ -1726,6 +1740,69 @@ const LINK_INVOICE_VOUCHER: Record<string, StructuredErrorEntry> = {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// Link SUPPLIER invoice to an existing posted verifikat (no new JE)
+// ─────────────────────────────────────────────────────────────────
+
+const LINK_SI_VOUCHER: Record<string, StructuredErrorEntry> = {
+  LINK_SI_VOUCHER_INVOICE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Leverantörsfakturan kunde inte hittas.',
+    message_en: 'Supplier invoice not found.',
+  },
+  LINK_SI_VOUCHER_VOUCHER_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Verifikationen kunde inte hittas.',
+    message_en: 'Journal entry not found.',
+  },
+  LINK_SI_VOUCHER_NOT_POSTED: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen är inte bokförd. Endast bokförda verifikationer kan länkas som betalning.',
+    message_en: 'Journal entry is not posted. Only posted entries can be linked as a payment.',
+  },
+  LINK_SI_VOUCHER_NO_AP_DEBIT: {
+    httpStatus: 400,
+    message_sv:
+      'Verifikationen debiterar inget leverantörsskuldskonto (244x). Rätta bokföringen först med en stornoverifikation som debiterar t.ex. 2440 (SEK) eller 2441 (utländsk valuta), via gnubok_correct_entry.',
+    message_en:
+      'The journal entry does not debit any accounts-payable account in the 244x range (e.g. 2440 SEK, 2441 foreign currency). Correct the booking first via a storno+correction (gnubok_correct_entry).',
+    remediation: {
+      description:
+        'Use gnubok_correct_entry to storno the existing voucher and re-book the payment as Dr 244x / Cr 1930, then link the corrected voucher.',
+      tool: 'gnubok_correct_entry',
+    },
+  },
+  LINK_SI_VOUCHER_ALREADY_LINKED: {
+    httpStatus: 409,
+    message_sv: 'Verifikationen är redan länkad till den här leverantörsfakturan.',
+    message_en: 'This journal entry is already linked to this supplier invoice.',
+  },
+  LINK_SI_VOUCHER_AMOUNT_EXCEEDS_REMAINING: {
+    httpStatus: 400,
+    message_sv:
+      'Verifikationens leverantörsskuldsdebitering är större än leverantörsfakturans återstående belopp. Verifikationen täcker fler fakturor — välj en annan verifikation eller rätta beloppet först.',
+    message_en:
+      'The voucher\'s AP debit exceeds the supplier invoice\'s remaining balance. Split the voucher across multiple supplier invoices via gnubok_correct_entry first, or pick a different voucher.',
+  },
+  LINK_SI_VOUCHER_CURRENCY_MISMATCH: {
+    httpStatus: 400,
+    message_sv:
+      'Verifikationens valuta matchar inte leverantörsfakturans. Endast verifikationer i fakturans valuta kan länkas.',
+    message_en: 'The voucher\'s currency does not match the supplier invoice currency.',
+  },
+  LINK_SI_VOUCHER_INVOICE_FULLY_PAID: {
+    httpStatus: 409,
+    message_sv: 'Leverantörsfakturan har redan slutbetalats. Inget mer behöver länkas.',
+    message_en: 'Supplier invoice is already fully paid.',
+  },
+  LINK_SI_VOUCHER_DB_ERROR: {
+    httpStatus: 500,
+    message_sv: 'Databasfel under länkning. Försök igen.',
+    message_en: 'Database error while linking the voucher. Please retry.',
+  },
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Combined registry
 // ─────────────────────────────────────────────────────────────────
 
@@ -1736,6 +1813,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...MATCH_INVOICE,
   ...LINK_TX_JE,
   ...LINK_INVOICE_VOUCHER,
+  ...LINK_SI_VOUCHER,
   ...MATCH_SI,
   ...INVOICE,
   ...SUPPLIER_INVOICE,
