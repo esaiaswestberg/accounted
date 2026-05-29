@@ -1803,6 +1803,134 @@ const LINK_SI_VOUCHER: Record<string, StructuredErrorEntry> = {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// Batch allocation (match_batch_allocate RPC)
+// ─────────────────────────────────────────────────────────────────
+
+const MATCH_BATCH: Record<string, StructuredErrorEntry> = {
+  BATCH_TX_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Transaktionen kunde inte hittas.',
+    message_en: 'Transaction not found.',
+  },
+  BATCH_UNAUTHORIZED: {
+    httpStatus: 403,
+    message_sv: 'Du har inte behörighet att fördela transaktioner för det här företaget.',
+    message_en: 'You are not authorized to allocate transactions for this company.',
+  },
+  BATCH_TX_ALREADY_BOOKED: {
+    httpStatus: 409,
+    message_sv:
+      'Transaktionen är redan bokförd. Avbokföra först (storno) innan du fördelar den på flera fakturor.',
+    message_en:
+      'Transaction is already booked. Reverse the existing journal entry before re-allocating.',
+  },
+  BATCH_TX_ZERO_AMOUNT: {
+    httpStatus: 400,
+    message_sv: 'Transaktioner med beloppet 0 kan inte bokföras.',
+    message_en: 'Zero-amount transactions cannot be allocated.',
+  },
+  BATCH_NO_ALLOCATIONS: {
+    httpStatus: 400,
+    message_sv: 'Minst en fördelning krävs.',
+    message_en: 'At least one allocation is required.',
+  },
+  BATCH_INVALID_AMOUNT: {
+    httpStatus: 400,
+    message_sv: 'Fördelningens belopp måste vara positivt.',
+    message_en: 'Allocation amount must be positive.',
+  },
+  BATCH_DUPLICATE_ALLOCATION: {
+    httpStatus: 400,
+    message_sv:
+      'Samma faktura förekommer två gånger i fördelningen. Slå ihop beloppen eller ta bort dubbletten.',
+    message_en:
+      'The same invoice appears twice in the allocations. Merge the amounts or remove the duplicate.',
+  },
+  BATCH_INVALID_KIND: {
+    httpStatus: 400,
+    message_sv:
+      'Okänd typ av fördelning. Endast customer_invoice och supplier_invoice stöds.',
+    message_en:
+      'Unknown allocation kind. Only customer_invoice and supplier_invoice are supported.',
+  },
+  BATCH_INVOICE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'En av fakturorna i fördelningen kunde inte hittas.',
+    message_en: 'One of the invoices in the allocation could not be found.',
+  },
+  BATCH_INVOICE_NOT_OPEN: {
+    httpStatus: 409,
+    message_sv: 'En av fakturorna är inte i ett obetalt läge och kan inte ta emot betalning.',
+    message_en: 'One of the invoices is not in an open state.',
+  },
+  BATCH_SUPPLIER_INVOICE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'En av leverantörsfakturorna i fördelningen kunde inte hittas.',
+    message_en: 'One of the supplier invoices in the allocation could not be found.',
+  },
+  BATCH_SUPPLIER_INVOICE_NOT_OPEN: {
+    httpStatus: 409,
+    message_sv:
+      'En av leverantörsfakturorna är inte i ett obetalt läge och kan inte ta emot betalning.',
+    message_en: 'One of the supplier invoices is not in an open state.',
+  },
+  BATCH_OVERSHOOT: {
+    httpStatus: 400,
+    message_sv:
+      'En av fördelningarna överskrider fakturans återstående belopp. Sänk beloppet eller fördela överskottet på fler fakturor.',
+    message_en:
+      'One allocation exceeds the invoice remaining amount. Lower it or split the excess across additional invoices.',
+  },
+  BATCH_AMOUNT_EXCEEDS_TX: {
+    httpStatus: 400,
+    message_sv:
+      'Summan av fördelningarna är större än transaktionens belopp.',
+    message_en: 'Sum of allocations exceeds the transaction amount.',
+  },
+  BATCH_MIXED_KINDS_UNSUPPORTED: {
+    httpStatus: 400,
+    message_sv:
+      'En transaktion kan inte fördelas på både kund- och leverantörsfakturor i samma verifikat. Skapa två separata fördelningar.',
+    message_en:
+      'A single transaction cannot allocate to both customer and supplier invoices in one batch.',
+  },
+  BATCH_DIRECTION_MISMATCH: {
+    httpStatus: 400,
+    message_sv:
+      'Transaktionens riktning matchar inte fördelningens typ. Kundfakturor kräver inkommande, leverantörsfakturor utgående.',
+    message_en:
+      'Transaction direction does not match allocation kind: customer invoices require income, supplier invoices require expense.',
+  },
+  BATCH_CURRENCY_MISMATCH: {
+    httpStatus: 400,
+    message_sv:
+      'Fakturans valuta matchar inte transaktionens. Endast samma valuta stöds i V1.',
+    message_en:
+      'Invoice currency does not match the transaction currency. Same-currency only in v1.',
+  },
+  BATCH_NO_FISCAL_PERIOD: {
+    httpStatus: 400,
+    message_sv:
+      'Det finns ingen öppen räkenskapsperiod för transaktionens datum. Skapa perioden först.',
+    message_en:
+      'No fiscal period exists for the transaction date. Create the period first.',
+  },
+  BATCH_PERIOD_LOCKED: {
+    httpStatus: 409,
+    message_sv:
+      'Räkenskapsperioden för transaktionens datum är stängd. Öppna perioden eller välj ett annat datum.',
+    message_en:
+      'Fiscal period for the transaction date is closed/locked. Open the period or pick a different date.',
+  },
+  BATCH_RPC_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Databasfel under fördelning. Försök igen.',
+    message_en: 'Database error during batch allocation. Please retry.',
+    retryable: true,
+  },
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Combined registry
 // ─────────────────────────────────────────────────────────────────
 
@@ -1814,6 +1942,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...LINK_TX_JE,
   ...LINK_INVOICE_VOUCHER,
   ...LINK_SI_VOUCHER,
+  ...MATCH_BATCH,
   ...MATCH_SI,
   ...INVOICE,
   ...SUPPLIER_INVOICE,

@@ -518,6 +518,52 @@ export const LinkSupplierInvoiceToVoucherSchema = z.object({
   notes: z.string().max(2000).optional(),
 })
 
+/**
+ * Allocate one bank transaction across N customer OR N supplier invoices.
+ * Backed by the match_batch_allocate PL/pgSQL RPC, which builds a single
+ * combined verifikat (samlingsverifikation) and inserts N payment rows.
+ */
+export const MatchBatchSchema = z
+  .object({
+    allocations: z
+      .array(
+        z.discriminatedUnion('kind', [
+          z.object({
+            kind: z.literal('customer_invoice'),
+            invoice_id: uuid,
+            // Strictly positive — zero or negative is rejected at the schema
+            // layer (PR #603 review) so the RPC's BATCH_INVALID_AMOUNT path
+            // is only reachable from non-HTTP callers.
+            amount: z.number().positive('Allocation amount must be greater than 0'),
+          }),
+          z.object({
+            kind: z.literal('supplier_invoice'),
+            supplier_invoice_id: uuid,
+            amount: z.number().positive('Allocation amount must be greater than 0'),
+          }),
+        ]),
+      )
+      .min(1, 'At least one allocation is required')
+      // Cap at 100 to prevent DoS via unbounded FOR UPDATE locks in the RPC
+      // (PR #603 compliance review — OWASP V4.2). Domain-appropriate ceiling:
+      // a real samlingsverifikat rarely covers more than a few dozen invoices.
+      .max(100, 'At most 100 allocations per batch'),
+  })
+  .superRefine((data, ctx) => {
+    // Reject mixed customer + supplier in a single batch — semantically a
+    // single bank transfer settles invoices on one side. The RPC also guards
+    // this with BATCH_MIXED_KINDS_UNSUPPORTED, but rejecting at the schema
+    // layer gives a cleaner 400 with a per-field path.
+    const kinds = new Set(data.allocations.map((a) => a.kind))
+    if (kinds.size > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['allocations'],
+        message: 'Allocations cannot mix customer_invoice and supplier_invoice kinds',
+      })
+    }
+  })
+
 export const LinkTransactionJournalEntrySchema = z.object({
   journal_entry_id: uuid,
   // Optional invoice to settle alongside the link. When provided, the

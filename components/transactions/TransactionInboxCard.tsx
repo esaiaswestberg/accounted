@@ -22,6 +22,7 @@ import {
   FileText,
   Link2,
   Loader2,
+  Split,
   Trash2,
 } from 'lucide-react'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
@@ -47,6 +48,10 @@ interface TransactionInboxCardProps {
   onOpenMatchDialog: (transaction: TransactionWithInvoice) => void
   /** Open the manual picker — routes to customer or supplier picker by amount sign. */
   onOpenMatchInvoicePicker: (transaction: TransactionWithInvoice) => void
+  /** Open the split-payment allocator (1 tx → N invoices) — same direction
+   *  detection as the single-pick picker. Optional so legacy callers stay
+   *  source-compatible. */
+  onOpenSplitMatch?: (transaction: TransactionWithInvoice) => void
   onOpenCategoryDialog: (transaction: TransactionWithInvoice) => void
   onDelete?: (id: string) => void
   onToggleSelect: (id: string) => void
@@ -61,6 +66,7 @@ export default function TransactionInboxCard({
   isSelected,
   onOpenMatchDialog,
   onOpenMatchInvoicePicker,
+  onOpenSplitMatch,
   onOpenCategoryDialog,
   onDelete,
   onToggleSelect,
@@ -178,6 +184,10 @@ export default function TransactionInboxCard({
     ? 'Matcha mot kundfaktura'
     : 'Matcha mot leverantörsfaktura'
 
+  const splitMatchLabel = isIncome
+    ? 'Dela inbetalningen på flera fakturor'
+    : 'Dela utbetalningen på flera leverantörsfakturor'
+
   return (
     <motion.div
       layout
@@ -255,6 +265,22 @@ export default function TransactionInboxCard({
                     disabled={isProcessing || isDisabled}
                   >
                     <Link2 className="h-4 w-4" />
+                  </Button>
+                )}
+                {showInvoiceMatchButton && onOpenSplitMatch && (
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-9 w-9"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onOpenSplitMatch(transaction)
+                    }}
+                    aria-label={splitMatchLabel}
+                    title={splitMatchLabel}
+                    disabled={isProcessing || isDisabled}
+                  >
+                    <Split className="h-4 w-4" />
                   </Button>
                 )}
                 {/* The Paperclip indicator next to the description

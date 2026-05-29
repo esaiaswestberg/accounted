@@ -33,6 +33,7 @@ import { SkattekontoMatchDialog } from '@/components/skattekonto/SkattekontoMatc
 import InvoiceMatchDialog from '@/components/transactions/InvoiceMatchDialog'
 import InvoicePicker from '@/components/transactions/InvoicePicker'
 import SupplierInvoicePicker from '@/components/transactions/SupplierInvoicePicker'
+import MatchAllocationDialog from '@/components/transactions/MatchAllocationDialog'
 import TransactionBookingDialog from '@/components/transactions/TransactionBookingDialog'
 import QuickReviewDialog from '@/components/transactions/QuickReviewDialog'
 
@@ -120,6 +121,8 @@ export default function TransactionsPage() {
   const [invoicePickerTransaction, setInvoicePickerTransaction] = useState<TransactionWithInvoice | null>(null)
   const [supplierInvoicePickerOpen, setSupplierInvoicePickerOpen] = useState(false)
   const [supplierInvoicePickerTransaction, setSupplierInvoicePickerTransaction] = useState<TransactionWithInvoice | null>(null)
+  const [splitMatchOpen, setSplitMatchOpen] = useState(false)
+  const [splitMatchTransaction, setSplitMatchTransaction] = useState<TransactionWithInvoice | null>(null)
   const [isMatchingSupplierFromPicker, setIsMatchingSupplierFromPicker] = useState(false)
   const [isMatchingFromPicker, setIsMatchingFromPicker] = useState(false)
 
@@ -1182,6 +1185,29 @@ export default function TransactionsPage() {
     }
   }
 
+  function openSplitMatchDialog(transaction: TransactionWithInvoice) {
+    setSplitMatchTransaction(transaction)
+    setSplitMatchOpen(true)
+  }
+
+  async function handleSplitMatchSuccess() {
+    if (!splitMatchTransaction) return
+    const txId = splitMatchTransaction.id
+    // Mark the tx as exiting to trigger the same removal animation the
+    // single-match flow uses, then drop it from the inbox once the refetch
+    // confirms it's booked. Mirrors the pattern at the supplier-invoice
+    // match success path below.
+    setExitingIds((prev) => new Set(prev).add(txId))
+    await fetchTransactions()
+    setTimeout(() => {
+      setExitingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(txId)
+        return next
+      })
+    }, 350)
+  }
+
   async function handleCreateTransaction(data: CreateTransactionInput) {
     setIsCreating(true)
     const { data: { user } } = await supabase.auth.getUser()
@@ -1710,6 +1736,7 @@ export default function TransactionsPage() {
                     onCategorize={handleCategorize}
                     onOpenMatchDialog={openMatchDialog}
                     onOpenMatchInvoicePicker={openInvoiceMatchPicker}
+                    onOpenSplitMatch={openSplitMatchDialog}
                     onOpenCategoryDialog={openCategoryDialog}
                     onDelete={handleDeleteTransaction}
                     onToggleSelect={toggleBatchSelect}
@@ -1796,6 +1823,16 @@ export default function TransactionsPage() {
         isConfirming={isConfirmingMatch}
         onConfirm={handleConfirmInvoiceMatch}
         onLinkToExisting={handleLinkToExistingVoucher}
+      />
+
+      <MatchAllocationDialog
+        open={splitMatchOpen}
+        onOpenChange={(o) => {
+          setSplitMatchOpen(o)
+          if (!o) setSplitMatchTransaction(null)
+        }}
+        transaction={splitMatchTransaction}
+        onSuccess={handleSplitMatchSuccess}
       />
 
       <TransactionBookingDialog
