@@ -69,10 +69,11 @@ export const POST = withRouteContext(
 
     const txLog = log.child({ transactionId })
 
+    // PR #607 round 3: p_user_id removed — RPC resolves caller from
+    // auth.uid() directly. Keeps the attack surface off the API boundary.
     const { data, error } = await supabase.rpc('match_batch_allocate', {
       p_tx_id: transactionId,
       p_allocations: validation.data.allocations,
-      p_user_id: user.id,
       p_company_id: companyId,
     })
 

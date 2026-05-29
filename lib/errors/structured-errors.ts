@@ -1887,6 +1887,13 @@ const MATCH_BATCH: Record<string, StructuredErrorEntry> = {
       'Summan av fördelningarna är större än transaktionens belopp.',
     message_en: 'Sum of allocations exceeds the transaction amount.',
   },
+  BATCH_AMOUNT_BELOW_TX: {
+    httpStatus: 400,
+    message_sv:
+      'Hela transaktionen måste fördelas. Lägg till fler fakturor eller höj något belopp så att summan motsvarar bankhändelsen.',
+    message_en:
+      'The full transaction amount must be allocated. Add more invoices or raise an amount so the sum matches the bank movement.',
+  },
   BATCH_MIXED_KINDS_UNSUPPORTED: {
     httpStatus: 400,
     message_sv:
@@ -1907,6 +1914,20 @@ const MATCH_BATCH: Record<string, StructuredErrorEntry> = {
       'Fakturans valuta matchar inte transaktionens. Endast samma valuta stöds i V1.',
     message_en:
       'Invoice currency does not match the transaction currency. Same-currency only in v1.',
+  },
+  BATCH_FX_RATE_MISSING: {
+    httpStatus: 400,
+    message_sv:
+      'Fakturan i annan valuta saknar växelkurs. Komplettera fakturans exchange_rate innan du fördelar.',
+    message_en:
+      'The foreign-currency invoice has no exchange rate on file. Complete invoice.exchange_rate before allocating.',
+  },
+  BATCH_FX_DEVIATION_TOO_LARGE: {
+    httpStatus: 400,
+    message_sv:
+      'Beloppet du angav avviker mer än 10 % från fakturans bokförda värde. Kontrollera att du fyllt i bankbeloppet i transaktionens valuta.',
+    message_en:
+      'The amount you entered deviates more than 10% from the invoice\'s booked SEK value. Check that you entered the bank-side amount in the transaction\'s currency.',
   },
   BATCH_NO_FISCAL_PERIOD: {
     httpStatus: 400,

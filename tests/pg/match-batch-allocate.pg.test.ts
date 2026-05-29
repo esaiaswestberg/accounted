@@ -166,8 +166,8 @@ describe('match_batch_allocate', () => {
     // it rolls back at the end.
     await withUserContext(userId, async (client) => {
       const r = await client.query<{ match_batch_allocate: RpcResult }>(
-        `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
-        [txId, JSON.stringify(allocations), userId, companyId],
+        `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
+        [txId, JSON.stringify(allocations), companyId],
       )
       const result = r.rows[0]!.match_batch_allocate
 
@@ -258,8 +258,8 @@ describe('match_batch_allocate', () => {
 
     await withUserContext(userId, async (client) => {
       const r = await client.query<{ match_batch_allocate: RpcResult }>(
-        `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
-        [txId, JSON.stringify(allocations), userId, companyId],
+        `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
+        [txId, JSON.stringify(allocations), companyId],
       )
       const result = r.rows[0]!.match_batch_allocate
 
@@ -297,11 +297,10 @@ describe('match_batch_allocate', () => {
 
     await withUserContext(outsiderId, async (client) => {
       const r = await client.query<{ match_batch_allocate: RpcResult }>(
-        `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
+        `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
         [
           txId,
           JSON.stringify([{ kind: 'supplier_invoice', supplier_invoice_id: si, amount: 1000 }]),
-          outsiderId,
           companyId,
         ],
       )
@@ -346,8 +345,8 @@ describe('match_batch_allocate', () => {
 
     await withUserContext(userId, async (client) => {
       const r = await client.query<{ match_batch_allocate: RpcResult }>(
-        `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
-        [txId, JSON.stringify(allocations), userId, companyId],
+        `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
+        [txId, JSON.stringify(allocations), companyId],
       )
       const result = r.rows[0]!.match_batch_allocate
       expect(result.ok).toBe(false)
@@ -367,11 +366,10 @@ describe('match_batch_allocate', () => {
 
     await withUserContext(userId, async (client) => {
       const r = await client.query<{ match_batch_allocate: RpcResult }>(
-        `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
+        `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
         [
           txId,
           JSON.stringify([{ kind: 'supplier_invoice', supplier_invoice_id: si, amount: 1000 }]),
-          userId,
           companyId,
         ],
       )
@@ -400,8 +398,8 @@ describe('match_batch_allocate', () => {
 
     await withUserContext(userId, async (client) => {
       const r = await client.query<{ match_batch_allocate: RpcResult }>(
-        `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
-        [txId, JSON.stringify(allocations), userId, companyId],
+        `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
+        [txId, JSON.stringify(allocations), companyId],
       )
       const result = r.rows[0]!.match_batch_allocate
       expect(result.ok).toBe(false)
@@ -443,20 +441,173 @@ describe('match_batch_allocate', () => {
 
     await withUserContext(userId, async (client) => {
       const r = await client.query<{ match_batch_allocate: RpcResult }>(
-        `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
+        `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
         [
           txId,
           JSON.stringify([
             { kind: 'supplier_invoice', supplier_invoice_id: si, amount: 1000 },
             { kind: 'customer_invoice', invoice_id: invoiceId, amount: 1000 },
           ]),
-          userId,
           companyId,
         ],
       )
       const result = r.rows[0]!.match_batch_allocate
       expect(result.ok).toBe(false)
       expect(result.code).toBe('BATCH_MIXED_KINDS_UNSUPPORTED')
+    })
+  })
+
+  // PR #607 — cross-currency happy path. One USD supplier invoice paid by
+  // a single SEK bank transaction. The RPC must book the AP line at the
+  // invoice's original SEK value (booked_sek = remaining × exchange_rate)
+  // and post the difference between booked_sek and the actual bank
+  // withdrawal to 7960 (loss) or 3960 (gain). Bank line is the full tx_abs.
+  it('books cross-currency supplier invoice with FX diff line and tx_abs bank line', async () => {
+    const { userId, companyId } = await seedTenant()
+    const supplier = await insertSupplier({ userId, companyId })
+
+    // USD invoice for $100, booked at 10.0 SEK/USD = 1000 SEK on 2440 at
+    // creation time. (We use the standard insertSupplierInvoice and patch
+    // the currency/exchange_rate after so we don't have to thread params
+    // through the helper.)
+    const si = await insertSupplierInvoice({
+      userId, companyId, supplierId: supplier, total: 100,
+    })
+    await getPool().query(
+      `UPDATE public.supplier_invoices
+       SET currency = 'USD', exchange_rate = 10.0, remaining_amount = 100
+       WHERE id = $1`,
+      [si],
+    )
+
+    // Bank actually withdrew 1050 SEK — rate moved to ~10.5 SEK/USD on
+    // payment day. Loss of 50 SEK lands on 7960.
+    const txId = await insertTransaction({
+      userId, companyId, amount: -1050, date: '2026-06-05', currency: 'SEK',
+    })
+
+    await withUserContext(userId, async (client) => {
+      const r = await client.query<{ match_batch_allocate: RpcResult }>(
+        `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
+        [
+          txId,
+          JSON.stringify([
+            { kind: 'supplier_invoice', supplier_invoice_id: si, amount: 1050 },
+          ]),
+          companyId,
+        ],
+      )
+      const result = r.rows[0]!.match_batch_allocate
+      expect(result.ok).toBe(true)
+      expect(result.allocations).toHaveLength(1)
+      expect(result.allocations![0]!.cross_currency).toBe(true)
+      expect(result.allocations![0]!.status).toBe('paid')
+
+      const lines = await client.query<{
+        account_number: string
+        debit_amount: string
+        credit_amount: string
+      }>(
+        `SELECT account_number, debit_amount, credit_amount
+         FROM public.journal_entry_lines
+         WHERE journal_entry_id = $1
+         ORDER BY sort_order`,
+        [result.journal_entry_id],
+      )
+
+      // Expected lines:
+      //   Dr 2440 1000  (booked SEK at original rate)
+      //   Dr 7960   50  (FX loss = bank tx — booked SEK)
+      //   Cr 1930 1050  (actual bank withdrawal)
+      expect(lines.rows).toHaveLength(3)
+
+      const ap = lines.rows.find((l) => l.account_number === '2440')!
+      expect(Number(ap.debit_amount)).toBe(1000)
+      expect(Number(ap.credit_amount)).toBe(0)
+
+      const fxLoss = lines.rows.find((l) => l.account_number === '7960')!
+      expect(Number(fxLoss.debit_amount)).toBe(50)
+      expect(Number(fxLoss.credit_amount)).toBe(0)
+
+      const bank = lines.rows.find((l) => l.account_number === '1930')!
+      expect(Number(bank.debit_amount)).toBe(0)
+      expect(Number(bank.credit_amount)).toBe(1050)
+
+      // Round-1 fix: bank line credit must equal tx_abs, not the AR/AP
+      // total. With FX diff lines this distinction matters — verify it.
+      expect(Number(bank.credit_amount)).toBe(1050)
+
+      // Supplier invoice settled in full and stored in invoice currency.
+      const inv = await client.query<{
+        status: string; paid_amount: string; remaining_amount: string
+      }>(
+        `SELECT status, paid_amount, remaining_amount FROM public.supplier_invoices WHERE id = $1`,
+        [si],
+      )
+      expect(inv.rows[0]!.status).toBe('paid')
+      expect(Number(inv.rows[0]!.paid_amount)).toBe(100) // USD value, not SEK
+      expect(Number(inv.rows[0]!.remaining_amount)).toBe(0)
+
+      // Round-3: payment row stores the effective payment-day rate
+      // (v_alloc_amount / v_inv_remaining = 1050/100 = 10.5) alongside
+      // the invoicing rate (10.0). swedish-compliance traceability fix.
+      const pay = await client.query<{
+        exchange_rate: string | null; payment_exchange_rate: string | null
+      }>(
+        `SELECT exchange_rate, payment_exchange_rate
+         FROM public.supplier_invoice_payments
+         WHERE supplier_invoice_id = $1`,
+        [si],
+      )
+      expect(Number(pay.rows[0]!.exchange_rate)).toBe(10) // invoicing rate
+      expect(Number(pay.rows[0]!.payment_exchange_rate)).toBe(10.5) // payment-day rate
+
+      // Sum of debits = sum of credits (balanced verifikat).
+      const balance = await client.query<{ debits: string; credits: string }>(
+        `SELECT
+           COALESCE(SUM(debit_amount), 0) AS debits,
+           COALESCE(SUM(credit_amount), 0) AS credits
+         FROM public.journal_entry_lines
+         WHERE journal_entry_id = $1`,
+        [result.journal_entry_id],
+      )
+      expect(Number(balance.rows[0]!.debits)).toBe(Number(balance.rows[0]!.credits))
+    })
+  })
+
+  // PR #607 round-1 — strict undershoot rejection. The RPC previously
+  // accepted sum(allocations) < tx_abs and silently underbooked the bank
+  // line, breaking reconciliation. Now it must reject with
+  // BATCH_AMOUNT_BELOW_TX.
+  it('rejects BATCH_AMOUNT_BELOW_TX when allocations sum below tx_abs', async () => {
+    const { userId, companyId } = await seedTenant()
+    const supplier = await insertSupplier({ userId, companyId })
+    const si = await insertSupplierInvoice({
+      userId, companyId, supplierId: supplier, total: 1000,
+    })
+    const txId = await insertTransaction({ userId, companyId, amount: -1500 })
+
+    await withUserContext(userId, async (client) => {
+      const r = await client.query<{ match_batch_allocate: RpcResult }>(
+        `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
+        [
+          txId,
+          JSON.stringify([
+            { kind: 'supplier_invoice', supplier_invoice_id: si, amount: 1000 },
+          ]),
+          companyId,
+        ],
+      )
+      const result = r.rows[0]!.match_batch_allocate
+      expect(result.ok).toBe(false)
+      expect(result.code).toBe('BATCH_AMOUNT_BELOW_TX')
+      expect(result.details).toMatchObject({ allocated: 1000, tx_amount_abs: 1500 })
+
+      const txRow = await client.query<{ journal_entry_id: string | null }>(
+        `SELECT journal_entry_id FROM public.transactions WHERE id = $1`,
+        [txId],
+      )
+      expect(txRow.rows[0]!.journal_entry_id).toBeNull()
     })
   })
 })

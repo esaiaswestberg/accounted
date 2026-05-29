@@ -89,3 +89,10 @@ export function generateInvoiceNumber(): string {
   const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0')
   return `${year}-${random}`
 }
+
+// Shared FX-rate validator — keeps UI, RPC (>= 100000 / <= 0), and the
+// invoices/supplier_invoices CHECK constraints in sync. Single source
+// of truth for the 0 < rate < 100000 bound.
+export function isValidExchangeRate(rate: number | null | undefined): rate is number {
+  return rate != null && rate > 0 && rate < 100000
+}
