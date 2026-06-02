@@ -22,7 +22,7 @@ import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { ingestTransactions } from '@/lib/transactions/ingest'
-import { contentDedupKey } from '@/lib/transactions/external-id'
+import { contentBucketKey, descriptionsBridge, normalizeImportedDescription } from '@/lib/transactions/external-id'
 import type { RawTransaction } from '@/types'
 
 const RawTx = z.object({
@@ -70,10 +70,10 @@ registerEndpoint({
     'Single ad-hoc transactions (use the dashboard). Documents/receipts (use the documents endpoint). Manually-created journal entries (Phase 4).',
   pitfalls: [
     'external_id is the primary dedup key — make it stable for the same physical transaction across reruns.',
-    'Content-based dedup (date+amount) runs in addition: a CSV row that matches an already-booked transaction by date+amount is skipped even if external_id differs.',
+    'Content-based dedup runs in addition: a row matching an already-booked transaction by date, amount AND description (prefix-containment, to survive PSD2 title enrichment) is skipped even if external_id differs.',
     'raw_insert_only=true skips ALL post-insert pipeline steps (matching, categorization). Use for viewer-only imports.',
     'Max 500 items per call. For larger imports, split into pages of 500.',
-    'Dry-run runs both dedup checks (external_id AND content-based date+amount against booked rows), matching the live pipeline. Numbers should agree barring concurrent imports between preview and commit.',
+    'Dry-run previews external_id + content dedup against BOOKED rows only; the live pipeline also dedups against unbooked bank-synced rows, so preview skips are a lower bound on the live skip count.',
   ],
   example: {
     request: {
@@ -153,25 +153,52 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
       const { data: bookedInRange } = await ctx.supabase
         .from('transactions')
-        .select('date, amount, description')
+        .select('date, amount, original_description, description')
         .eq('company_id', ctx.companyId!)
         .not('journal_entry_id', 'is', null)
         .gte('date', dateFrom)
         .lte('date', dateTo)
-      // Build the content-dedup key with the SAME helper the live pipeline uses
-      // (lib/transactions/ingest.ts), so the preview's content-match decision
-      // matches the eventual ingest exactly: öre-normalized amount (handles a
-      // PostgREST numeric returned as a string) plus the description prefix.
-      const bookedKeys = new Set(
-        (bookedInRange ?? []).map((r) => {
-          const row = r as { date: string; amount: number | string; description: string | null }
-          return contentDedupKey(row.date, row.amount, row.description)
-        }),
-      )
+      // Mirror the live pipeline's content-dedup bridge (lib/transactions/ingest.ts):
+      // bucket booked rows by (date, öre) and match by description prefix-containment
+      // (keyed off the immutable original_description), consumed with the SAME
+      // longest-match + counting semantics — so a batch of N copies against M booked
+      // twins previews M skips and N−M imports, not N. Scope note: like the live
+      // pipeline's booked map this previews ONLY booked rows; the unbooked
+      // enable_banking overlap check is not modelled here.
+      const bookedBuckets = new Map<string, string[]>()
+      for (const r of bookedInRange ?? []) {
+        const row = r as { date: string; amount: number | string; original_description: string | null; description: string | null }
+        const key = contentBucketKey(row.date, row.amount)
+        const desc = normalizeImportedDescription(row.original_description ?? row.description).toLowerCase().trim()
+        const bucket = bookedBuckets.get(key)
+        if (bucket) bucket.push(desc)
+        else bookedBuckets.set(key, [desc])
+      }
+      // Consume the longest bridging stored description (counting semantics) — the
+      // same logic as ingest.ts consumeBridgingTwin, on this preview's mutable copy.
+      const consumeBookedTwin = (date: string, amount: number, desc: string): boolean => {
+        const descs = bookedBuckets.get(contentBucketKey(date, amount))
+        if (!descs || descs.length === 0) return false
+        let bestIdx = -1
+        let bestLen = -1
+        for (let i = 0; i < descs.length; i++) {
+          if (descriptionsBridge(desc, descs[i]) && descs[i].length > bestLen) {
+            bestIdx = i
+            bestLen = descs[i].length
+          }
+        }
+        if (bestIdx === -1) return false
+        descs.splice(bestIdx, 1)
+        return true
+      }
 
       const previewRows = body.transactions.map((tx) => {
         const extIdHit = knownExtIds.has(tx.external_id)
-        const contentHit = bookedKeys.has(contentDedupKey(tx.date, tx.amount, tx.description))
+        // external_id precedence mirrors the live pipeline: a row caught by
+        // external_id must NOT consume a booked twin (so it stays available for a
+        // genuine content-only duplicate later in the batch).
+        const contentHit =
+          !extIdHit && consumeBookedTwin(tx.date, tx.amount, normalizeImportedDescription(tx.description))
         const wouldSkip = extIdHit || contentHit
         const reason = extIdHit
           ? 'external_id_match'

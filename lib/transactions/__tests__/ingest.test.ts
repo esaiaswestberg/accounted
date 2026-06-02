@@ -391,6 +391,186 @@ describe('ingestTransactions', () => {
   })
 
   // -----------------------------------------------------------------------
+  // 2d. Description drift: PSD2 enrichment is prefix-preserving, so an
+  //     enriched re-import ("TIC" → "TIC  BG … via internet") still bridges
+  //     the stored original via prefix-containment. This is the June 2026
+  //     incident: the external_id ALSO changed, so the bridge is the only net.
+  // -----------------------------------------------------------------------
+  it('dedupes an enriched re-import whose description extends the stored original', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const raw = makeRaw({
+      date: '2026-04-07',
+      amount: -11231,
+      description: 'KAFFE              BG 0000000000 Bg-bet. via internet', // enriched
+      external_id: 'eb_SE00_2026-04-07_-1123100_0', // NEW-scheme id → external_id dedup misses
+      import_source: 'enable_banking',
+    })
+
+    enqueue({ data: [], error: null }) // booked map — none
+    // Unbooked enable_banking row carrying the SHORT original description.
+    enqueue({
+      data: [{ date: '2026-04-07', amount: -11231, original_description: 'KAFFE', description: 'KAFFE' }],
+      error: null,
+    })
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup — different scheme, no match
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+    expect(result.duplicates).toBe(1)
+    expect(result.imported).toBe(0)
+  })
+
+  // -----------------------------------------------------------------------
+  // 2e. Order-independence: a genuinely-new row whose description does NOT
+  //     bridge an existing same-(date,amount) row is kept, and the re-import
+  //     that DOES bridge is deduped — regardless of provider ordering.
+  // -----------------------------------------------------------------------
+  it.each([
+    ['new-first', ['Lunch', 'Coffee']],
+    ['dup-first', ['Coffee', 'Lunch']],
+  ])('keeps the distinct row and dedupes the bridging twin (%s)', async (_label, order) => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const rows = order.map((desc, i) =>
+      makeRaw({
+        date: '2026-04-07',
+        amount: -250,
+        description: desc,
+        external_id: `csv_${desc}_${i}`,
+        import_source: 'csv_lunar',
+      }),
+    )
+    const insertedDesc = 'Lunch' // the non-bridging "Lunch" is always the row that gets inserted
+
+    enqueue({ data: [], error: null }) // booked map — none
+    // One unbooked enable_banking row "Coffee" — only the incoming "Coffee" bridges it.
+    enqueue({
+      data: [{ date: '2026-04-07', amount: -250, original_description: 'Coffee', description: 'Coffee' }],
+      error: null,
+    })
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup — no match
+    enqueue({
+      data: makeTransaction({ id: 'tx-lunch', description: insertedDesc, amount: -250 }),
+      error: null,
+    }) // insert for the non-bridging "Lunch"
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, rows)
+
+    expect(result.imported).toBe(1) // "Lunch" kept
+    expect(result.duplicates).toBe(1) // "Coffee" deduped
+    expect(result.transaction_ids).toEqual(['tx-lunch'])
+  })
+
+  // -----------------------------------------------------------------------
+  // 2f. Counting semantics: N stored twins dedup exactly N incoming bridging
+  //     rows; the surplus is inserted (never silently collapsed).
+  // -----------------------------------------------------------------------
+  it('dedupes exactly as many incoming rows as there are stored twins (counting)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const rows = [1, 2, 3].map((n) =>
+      makeRaw({
+        date: '2026-04-07',
+        amount: -100,
+        description: `ICA Kortköp ${n}`,
+        external_id: `csv_ica_${n}`,
+        import_source: 'csv_lunar',
+      }),
+    )
+
+    enqueue({ data: [], error: null }) // booked map — none
+    // Two stored unbooked "ICA" twins → only two of the three incoming dedup.
+    enqueue({
+      data: [
+        { date: '2026-04-07', amount: -100, original_description: 'ICA', description: 'ICA' },
+        { date: '2026-04-07', amount: -100, original_description: 'ICA', description: 'ICA' },
+      ],
+      error: null,
+    })
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup — no match
+    enqueue({
+      data: makeTransaction({ id: 'tx-ica-surplus', description: 'ICA Kortköp 3', amount: -100 }),
+      error: null,
+    }) // insert for the surplus third row
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, rows)
+
+    expect(result.duplicates).toBe(2)
+    expect(result.imported).toBe(1)
+    expect(result.transaction_ids).toEqual(['tx-ica-surplus'])
+  })
+
+  // -----------------------------------------------------------------------
+  // 2g. Cross-account guard: a transaction on one bank account must NOT
+  //     deduplicate a genuinely-different one on ANOTHER account of the same
+  //     company. The content bucket is company-wide (only external_id embeds
+  //     the account), so the bridge also requires matching cash_account_id when
+  //     both sides know it.
+  // -----------------------------------------------------------------------
+  it('does not dedupe a bridging twin that settled on a different cash account', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const raw = makeRaw({
+      date: '2026-04-07',
+      amount: -250,
+      description: 'Avgift',
+      external_id: 'eb_acctB_2026-04-07_-25000_0',
+      import_source: 'enable_banking',
+    })
+    const inserted = makeTransaction({ id: 'tx-acctB', amount: -250 })
+
+    enqueue({ data: [], error: null }) // booked map — none
+    // Unbooked enable_banking twin, but it settled on a DIFFERENT account (A).
+    enqueue({
+      data: [{ date: '2026-04-07', amount: -250, original_description: 'Avgift', description: 'Avgift', cash_account_id: 'acct-A' }],
+      error: null,
+    })
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup — no match
+    enqueue({ data: { id: 'acct-B' }, error: null }) // cash_accounts lookup → batch settled on account B
+    enqueue({ data: inserted, error: null }) // insert — not a duplicate
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw], {
+      settlementAccount: '1931',
+    })
+
+    expect(result.imported).toBe(1)
+    expect(result.duplicates).toBe(0)
+    expect(result.transaction_ids).toEqual(['tx-acctB'])
+  })
+
+  it('dedupes a bridging twin on the SAME cash account', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const raw = makeRaw({
+      date: '2026-04-07',
+      amount: -250,
+      description: 'Avgift',
+      external_id: 'eb_acctA_2026-04-07_-25000_99', // different id → external_id dedup misses
+      import_source: 'enable_banking',
+    })
+
+    enqueue({ data: [], error: null }) // booked map — none
+    enqueue({
+      data: [{ date: '2026-04-07', amount: -250, original_description: 'Avgift', description: 'Avgift', cash_account_id: 'acct-A' }],
+      error: null,
+    })
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup — no match
+    enqueue({ data: { id: 'acct-A' }, error: null }) // cash_accounts lookup → batch settled on account A (same)
+    // No insert — deduped.
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw], {
+      settlementAccount: '1930',
+    })
+
+    expect(result.duplicates).toBe(1)
+    expect(result.imported).toBe(0)
+  })
+
+  // -----------------------------------------------------------------------
   // 3. Counts errors when insert fails
   // -----------------------------------------------------------------------
   it('counts errors when insert fails', async () => {

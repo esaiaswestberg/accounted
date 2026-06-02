@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   amountToOre,
   buildStableExternalIds,
-  contentDedupKey,
+  contentBucketKey,
+  descriptionsBridge,
   normalizeImportedDescription,
   FALLBACK_DESCRIPTION,
 } from '../external-id'
@@ -87,35 +88,67 @@ describe('buildStableExternalIds', () => {
   it('returns an empty array for an empty batch', () => {
     expect(buildStableExternalIds('eb', 'acc', [])).toEqual([])
   })
+
+  // FORMAT-FREEZE guard. `external_id` is a STORED key: changing the template
+  // string orphans every prior row (its stored id stops matching the new scheme)
+  // and re-imports the lot on the next sync — the June 2026 fleet-wide incident.
+  // If you must change the format, you MUST ship a coordinated backfill of
+  // existing rows; updating this assertion without one is the bug.
+  it('FORMAT IS FROZEN — changing this template silently orphans every prior external_id', () => {
+    expect(
+      buildStableExternalIds('eb', 'SE0000000000000000000000', [
+        { date: '2026-04-07', amount: -11231 },
+      ]),
+    ).toEqual(['eb_SE0000000000000000000000_2026-04-07_-1123100_0'])
+  })
 })
 
-describe('contentDedupKey', () => {
+describe('contentBucketKey', () => {
+  it('keys off (date, öre) only — no description', () => {
+    expect(contentBucketKey('2024-06-15', -250)).toBe('2024-06-15|-25000')
+  })
+
   it('matches a JS number against a PostgREST numeric string for the same amount', () => {
-    // The core dedup-bridge fix: an incoming raw number and a DB-fetched string
-    // for the same amount + date + description must produce the SAME key.
-    const incoming = contentDedupKey('2024-06-15', -250, 'ICA Maxi Solna')
-    const stored = contentDedupKey('2024-06-15', '-250.00', 'ICA Maxi Solna')
-    expect(incoming).toBe(stored)
+    // A DB-fetched numeric string and a raw JS number for the same amount must
+    // land in the SAME bucket, otherwise the bridge silently misses.
+    expect(contentBucketKey('2024-06-15', -250)).toBe(contentBucketKey('2024-06-15', '-250.00'))
   })
 
-  it('normalizes description (lowercase, trim, 24-char prefix)', () => {
-    expect(contentDedupKey('2024-06-15', -100, '  ICA Maxi Solna  '))
-      .toBe(contentDedupKey('2024-06-15', -100, 'ica maxi solna'))
-    // Differs only past the 24-char prefix → same key.
-    expect(contentDedupKey('2024-06-15', -100, 'Betalning till leverantör AAA'))
-      .toBe(contentDedupKey('2024-06-15', -100, 'Betalning till leverantör BBB'))
+  it('separates distinct amounts and dates into distinct buckets', () => {
+    expect(contentBucketKey('2024-06-15', -250)).not.toBe(contentBucketKey('2024-06-15', -100))
+    expect(contentBucketKey('2024-06-15', -250)).not.toBe(contentBucketKey('2024-06-16', -250))
+  })
+})
+
+describe('descriptionsBridge', () => {
+  it('bridges prefix-preserving PSD2 enrichment (the June 2026 drift)', () => {
+    // The same transaction whose title grew between syncs must still bridge.
+    // (Synthetic stand-ins for the real prefix-preserving enrichment pattern.)
+    expect(descriptionsBridge('KAFFE', 'KAFFE  BG 0000000000 Bg-bet. via internet')).toBe(true)
+    expect(descriptionsBridge('UTBETALNING Insättning', 'UTBETALNING')).toBe(true)
+    expect(descriptionsBridge('REF 000000 Europabetalning', 'REF 000000')).toBe(true)
   })
 
-  it('keeps distinct transactions apart when description differs in the prefix', () => {
-    expect(contentDedupKey('2024-06-15', -250, 'ICA Maxi'))
-      .not.toBe(contentDedupKey('2024-06-15', -250, 'Coop Stockholm'))
+  it('is case- and whitespace-insensitive', () => {
+    expect(descriptionsBridge('  Mataffär Solna  ', 'mataffär solna')).toBe(true)
   })
 
-  it('treats a null/undefined description as an empty prefix', () => {
-    expect(contentDedupKey('2024-06-15', -100, null))
-      .toBe(contentDedupKey('2024-06-15', -100, undefined))
-    expect(contentDedupKey('2024-06-15', -100, null))
-      .toBe(contentDedupKey('2024-06-15', -100, ''))
+  it('does NOT bridge genuinely distinct descriptions sharing a date+amount', () => {
+    // Distinct reference codes on same-day same-amount rows (e.g. verification
+    // micro-deposits) must NOT collapse — each is a real transaction.
+    expect(descriptionsBridge('REF-AAAA1111', 'REF-BBBB2222')).toBe(false)
+    // Same common stem, diverging tails — still distinct.
+    expect(descriptionsBridge('PMT.Ref AAA', 'PMT.Ref BBB')).toBe(false)
+    expect(descriptionsBridge('Coffee', 'Lunch')).toBe(false)
+  })
+
+  it('does not let a blank description wildcard-match a described row', () => {
+    // A blank carries no signal: it must not consume a described same-(date,öre)
+    // row. Live callers normalize blanks to FALLBACK_DESCRIPTION, so this is
+    // defense-in-depth. Only two blanks bridge each other (date+öre identity).
+    expect(descriptionsBridge('', 'anything')).toBe(false)
+    expect(descriptionsBridge('anything', null)).toBe(false)
+    expect(descriptionsBridge(undefined, '')).toBe(true)
   })
 })
 

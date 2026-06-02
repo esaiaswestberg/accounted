@@ -65,6 +65,14 @@ export function normalizeImportedDescription(raw: string | null | undefined): st
  * — where `n` is an occurrence index that disambiguates genuinely identical
  * transactions (same account, date and amount) within the batch.
  *
+ * ⚠️ THE FORMAT STRING IS A STORED KEY. It is persisted to
+ * `transactions.external_id` and dedup compares incoming ids against the stored
+ * ones byte-for-byte. Changing this template silently orphans every prior row
+ * (its stored id no longer matches the new scheme) and re-imports them all on
+ * the next sync — this is exactly what happened in the June 2026 fleet-wide
+ * incident. Any format change MUST ship a coordinated backfill of existing rows
+ * and is locked by a frozen-format test (see `external-id.test.ts`).
+ *
  * Properties this guarantees:
  * - **Re-sync dedupe**: the same set of transactions produces the same *set*
  *   of ids regardless of the order the ASPSP returns them in, so a repeat sync
@@ -77,13 +85,13 @@ export function normalizeImportedDescription(raw: string | null | undefined): st
  *   This is the safeguard the bank-file importer already relies on via its
  *   `rowIndex` component (see `lib/import/bank-file/parser.ts`).
  *
- * Why description is NOT an input here (but IS in `contentDedupKey`): the
+ * Why description is NOT an input here (but IS in the content bridge): the
  * `external_id` must be a *stable unique key*, so it cannot depend on a field
  * that drifts — PSD2 enriches/reorders descriptions between a transaction's
  * pending and booked states. The occurrence index gives uniqueness without
- * that fragility. `contentDedupKey` has the opposite job — it is a best-effort
- * *bridge* that must avoid dropping real transactions — so it keeps the
- * description (see that function for the trade-off).
+ * that fragility. The content bridge (`contentBucketKey` + `descriptionsBridge`)
+ * has the opposite job — it is a best-effort *bridge* that must avoid dropping
+ * real transactions — so it keeps the description (see those for the trade-off).
  *
  * @param prefix       Source tag, e.g. `'eb'` for Enable Banking.
  * @param accountScope Stable per-account scope (prefer IBAN, fall back to the
@@ -108,32 +116,51 @@ export function buildStableExternalIds(
 }
 
 /**
- * Stable content-dedup key used to bridge transactions across `external_id`
- * schemes and import sources (PSD2 ⇄ CSV, old id scheme ⇄ new id scheme).
+ * Bucket key for the content-dedup bridge: `{date}|{öre}` — deliberately NO
+ * description. Transactions that share a date and amount fall into the same
+ * bucket; `descriptionsBridge` then decides, per pair, whether two rows in that
+ * bucket are the same transaction. Splitting bucketing (date+öre) from matching
+ * (description) is what lets the bridge survive description drift while still
+ * keeping genuinely-distinct same-(date,amount) transactions apart.
  *
- * Format: `{date}|{öre}|{normalized description prefix}`.
- *
- * This is a *best-effort* dedup signal, not a unique key. It is consumed with
- * COUNTING semantics in the ingest pipeline (N existing matches consume N
- * incoming), and its job is to skip re-imports WITHOUT ever dropping a real
- * transaction. That asymmetry drives the two design choices here:
- *
- * - **öre via `amountToOre`** — a JS number (`-250`) and a PostgREST numeric
- *   string (`"-250.00"`) must collapse to the same key, otherwise dedup
- *   silently misses.
- * - **description IS included** (unlike `external_id`) — two genuinely distinct
- *   transactions that merely share a date and amount (e.g. two SEK 250 card
- *   purchases) must NOT be collapsed into one, or a real transaction is lost.
- *   Including the description prefix biases toward keeping both. The cost is
- *   that if a description drifts between syncs the bridge can miss a true
- *   duplicate — an acceptable trade for an accounting ledger, where a visible,
- *   user-deletable duplicate is far safer than a silently dropped row.
+ * öre via `amountToOre` so a JS number (`-250`) and a PostgREST numeric string
+ * (`"-250.00"`) collapse to the same bucket, otherwise dedup silently misses.
  */
-export function contentDedupKey(
-  date: string,
-  amount: number | string,
-  description: string | null | undefined
-): string {
-  const descPrefix = (description || '').toLowerCase().trim().slice(0, 24)
-  return `${date}|${amountToOre(amount)}|${descPrefix}`
+export function contentBucketKey(date: string, amount: number | string): string {
+  return `${date}|${amountToOre(amount)}`
+}
+
+/**
+ * Decide whether two normalized descriptions (same date+öre bucket) describe the
+ * same underlying transaction — the matching half of the content-dedup bridge.
+ *
+ * Returns true when either description is a prefix of the other. PSD2 enrichment
+ * is **prefix-preserving**: the same transaction's title grows between syncs
+ * ("TIC" → "TIC  BG 0000005786439 Bg-bet. via internet", "UTBETALNING" →
+ * "UTBETALNING Insättning"), so prefix-containment bridges the two where a
+ * fixed-length prefix *equality* check (the pre-June-2026 scheme) missed and
+ * re-imported. A blank description carries no signal, so it never bridges a
+ * *described* row — otherwise an empty title would wildcard-match any
+ * same-(date,öre) transaction and could silently consume a real one; only two
+ * blanks bridge each other (date+öre identity). In practice every caller
+ * normalizes blanks to FALLBACK_DESCRIPTION upstream (see
+ * normalizeImportedDescription), so the blank path is defense-in-depth.
+ * Genuinely distinct descriptions ("Coffee" vs "Lunch", or two different
+ * reference codes that share a date and amount) are NOT prefixes of one another
+ * and never bridge, so two real same-(date,amount) transactions are kept apart.
+ *
+ * This is a *best-effort* signal, consumed with COUNTING semantics in the ingest
+ * pipeline (N existing matches consume N incoming): its job is to skip re-imports
+ * WITHOUT ever dropping a real transaction. The asymmetry favours keeping a
+ * visible, user-deletable duplicate over silently losing a row.
+ */
+export function descriptionsBridge(
+  a: string | null | undefined,
+  b: string | null | undefined
+): boolean {
+  const x = (a ?? '').toLowerCase().trim()
+  const y = (b ?? '').toLowerCase().trim()
+  // A blank never wildcards a described row; only two blanks bridge each other.
+  if (x === '' || y === '') return x === y
+  return x.startsWith(y) || y.startsWith(x)
 }

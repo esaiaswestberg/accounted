@@ -7,15 +7,32 @@ import { findSupplierInvoiceMatch } from '@/lib/invoices/supplier-invoice-matchi
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { contentDedupKey, normalizeImportedDescription } from '@/lib/transactions/external-id'
+import { contentBucketKey, descriptionsBridge, normalizeImportedDescription } from '@/lib/transactions/external-id'
 import type { Transaction, RawTransaction, IngestResult, IngestOptions, SupplierInvoice, Currency, ExchangeRate } from '@/types'
 
 // Re-export types for backward compatibility
 export type { RawTransaction, IngestResult } from '@/types'
 
+/**
+ * One existing row in a content-dedup bucket: its normalized/lowercased
+ * description plus the cash account it settled on (null for legacy rows that
+ * predate the cash_account_id backfill). `cashAccountId` is the cross-account
+ * guard — see `consumeBridgingTwin`.
+ */
+type BucketEntry = { desc: string; cashAccountId: string | null }
+
+/**
+ * Content-dedup bucket: a `{date}|{öre}` key mapped to the multiset of existing
+ * rows in that bucket. Matching is by `descriptionsBridge` (prefix-containment)
+ * gated by the account guard, consumed with COUNTING semantics — one entry is
+ * spliced out per deduped incoming row — so two genuinely-distinct
+ * same-(date,amount) transactions are never collapsed.
+ */
+type DescBucket = Map<string, BucketEntry[]>
+
 interface ExistingTransactionMaps {
   /** Booked transactions (any source) — consumed by any incoming raw transaction. */
-  booked: Map<string, number>
+  booked: DescBucket
   /**
    * Unbooked enable_banking transactions — consumed by any incoming raw
    * transaction regardless of source. Catches two cases: PSD2 reconnect
@@ -23,7 +40,22 @@ interface ExistingTransactionMaps {
    * CSV imports overlapping an active PSD2 sync (same Lunar/etc tx arriving
    * twice, once via PSD2 and once via file upload).
    */
-  unbookedEnableBanking: Map<string, number>
+  unbookedEnableBanking: DescBucket
+}
+
+/** Push a row into its (date, öre) bucket, normalizing the description. */
+function addToBucket(
+  bucket: DescBucket,
+  date: string,
+  amount: number | string,
+  description: string,
+  cashAccountId: string | null,
+): void {
+  const key = contentBucketKey(date, amount)
+  const entry: BucketEntry = { desc: description.toLowerCase().trim(), cashAccountId }
+  const entries = bucket.get(key)
+  if (entries) entries.push(entry)
+  else bucket.set(key, [entry])
 }
 
 async function buildExistingTransactionMaps(
@@ -31,8 +63,8 @@ async function buildExistingTransactionMaps(
   companyId: string,
   rawTransactions: RawTransaction[]
 ): Promise<ExistingTransactionMaps> {
-  const booked = new Map<string, number>()
-  const unbookedEnableBanking = new Map<string, number>()
+  const booked: DescBucket = new Map()
+  const unbookedEnableBanking: DescBucket = new Map()
   if (rawTransactions.length === 0) return { booked, unbookedEnableBanking }
 
   const dates = rawTransactions.map((t) => t.date).sort()
@@ -42,7 +74,7 @@ async function buildExistingTransactionMaps(
   try {
     const { data: bookedRows } = await supabase
       .from('transactions')
-      .select('date, amount, original_description, description')
+      .select('date, amount, original_description, description, cash_account_id')
       .eq('company_id', companyId)
       .not('journal_entry_id', 'is', null)
       .gte('date', dateFrom)
@@ -54,12 +86,13 @@ async function buildExistingTransactionMaps(
         // description: a title edit must never make the dedup bridge miss a
         // genuine re-import. Falls back to description for rows predating the
         // original_description column.
-        const key = contentDedupKey(
+        addToBucket(
+          booked,
           tx.date,
           tx.amount,
           normalizeImportedDescription(tx.original_description ?? tx.description),
+          tx.cash_account_id ?? null,
         )
-        booked.set(key, (booked.get(key) || 0) + 1)
       }
     }
   } catch {
@@ -69,7 +102,7 @@ async function buildExistingTransactionMaps(
   try {
     const { data: unbookedBank } = await supabase
       .from('transactions')
-      .select('date, amount, original_description, description')
+      .select('date, amount, original_description, description, cash_account_id')
       .eq('company_id', companyId)
       .is('journal_entry_id', null)
       .eq('import_source', 'enable_banking')
@@ -80,12 +113,13 @@ async function buildExistingTransactionMaps(
       for (const tx of unbookedBank) {
         // See booked-map note: dedup on the immutable bank original so a
         // user title edit cannot reopen the duplicate-import window.
-        const key = contentDedupKey(
+        addToBucket(
+          unbookedEnableBanking,
           tx.date,
           tx.amount,
           normalizeImportedDescription(tx.original_description ?? tx.description),
+          tx.cash_account_id ?? null,
         )
-        unbookedEnableBanking.set(key, (unbookedEnableBanking.get(key) || 0) + 1)
       }
     }
   } catch {
@@ -252,25 +286,57 @@ export async function ingestTransactions(
       continue
     }
 
-    // 1b. Content-based dedup: skip if an already-booked transaction
-    // exists with the same date, amount, and description prefix. Built from the
-    // normalized description so it matches the stored original_description keys.
-    const contentKey = contentDedupKey(raw.date, raw.amount, description)
-    const bookedCount = existingMaps.booked.get(contentKey) || 0
-    if (bookedCount > 0) {
-      existingMaps.booked.set(contentKey, bookedCount - 1)
-      result.duplicates++
-      continue
+    // 1b/1c. Content-dedup bridge: skip if an existing booked row (any source)
+    // OR an unbooked enable_banking row shares this (date, öre) bucket and a
+    // *bridging* description (prefix-containment, see descriptionsBridge). This
+    // is the net that catches re-imports the external_id check misses — chiefly
+    // old-format ids re-synced after the id scheme changed, and PSD2 description
+    // enrichment between syncs ("TIC" → "TIC  BG … via internet"). Booked first,
+    // then unbooked, preserving the historical 1b-before-1c order.
+    //
+    // Consumed with COUNTING semantics: each match splices one stored entry out
+    // of its bucket, so N stored twins dedup exactly N incoming and two
+    // genuinely-distinct same-(date,amount) transactions are kept apart. We
+    // consume the LONGEST bridging stored description first so a more-specific
+    // twin is matched before a generic one, leaving generic entries for shorter
+    // incoming rows.
+    //
+    // Account guard: when BOTH the incoming batch and a stored entry have a known
+    // cash_account_id, they must match — so a transaction on one bank account
+    // never deduplicates a genuinely-different one on another account of the same
+    // company (the content bucket is company-wide; only external_id embeds the
+    // account). A null on either side falls back to bridge-allowed, leaving
+    // single-account and legacy (un-backfilled) rows exactly as before.
+    //
+    // Residual trade-off: within one account, a genuinely-new row whose
+    // description is a prefix-extension of an existing same-(date,öre) row can be
+    // mis-deduped; it is rare, bounded to the ~90-day PSD2 window where old-format
+    // ids still overlap, and the frozen external_id (Layer 1) is the exact dedup
+    // going forward — accepted to stop the re-import flood (the inverse, a visible
+    // duplicate, was the reported pain).
+    const bucketKey = contentBucketKey(raw.date, raw.amount)
+    const consumeBridgingTwin = (bucket: DescBucket): boolean => {
+      const entries = bucket.get(bucketKey)
+      if (!entries || entries.length === 0) return false
+      let bestIdx = -1
+      let bestLen = -1
+      for (let i = 0; i < entries.length; i++) {
+        const entry = entries[i]
+        const sameAccount =
+          cashAccountId === null || entry.cashAccountId === null || entry.cashAccountId === cashAccountId
+        if (sameAccount && descriptionsBridge(description, entry.desc) && entry.desc.length > bestLen) {
+          bestIdx = i
+          bestLen = entry.desc.length
+        }
+      }
+      if (bestIdx === -1) return false
+      entries.splice(bestIdx, 1)
+      return true
     }
-
-    // 1c. Overlap dedup: skip if an unbooked enable_banking row already
-    // exists with the same (date, amount, description prefix). Applies to
-    // any incoming source — PSD2 reconnects, CSV imports over an active
-    // PSD2 sync, etc. Description prefix prevents unrelated transfers from
-    // colliding on (date, amount) alone.
-    const unbookedEbCount = existingMaps.unbookedEnableBanking.get(contentKey) || 0
-    if (unbookedEbCount > 0) {
-      existingMaps.unbookedEnableBanking.set(contentKey, unbookedEbCount - 1)
+    if (
+      consumeBridgingTwin(existingMaps.booked) ||
+      consumeBridgingTwin(existingMaps.unbookedEnableBanking)
+    ) {
       result.duplicates++
       continue
     }
