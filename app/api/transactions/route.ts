@@ -2,6 +2,9 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { requireCompanyId } from '@/lib/company/context'
 import { scopeTransactionsToAccount } from '@/lib/reconciliation/bank-reconciliation'
+import { withRouteContext } from '@/lib/api/with-route-context'
+import { validateBody } from '@/lib/api/validate'
+import { CreateTransactionSchema } from '@/lib/api/schemas'
 
 const MAX_ROWS = 500
 
@@ -104,3 +107,52 @@ export async function GET(request: Request) {
 
   return NextResponse.json({ data: truncated, has_more: hasMore, limit: MAX_ROWS })
 }
+
+// Manual bank-transaction creation. This is the server-side boundary the form
+// now goes through (it used to insert straight into Supabase from the browser).
+// withRouteContext enforces auth/MFA + resolves companyId; validateBody runs
+// the shared CreateTransactionSchema so the date rule etc. are validated
+// server-side, not just client-side.
+export const POST = withRouteContext(
+  'transaction.create',
+  async (request, { supabase, companyId, user, log }) => {
+    // Pass the request-scoped logger so a rejected payload (e.g. a malformed
+    // date) is recorded server-side — that's where anomaly detection belongs,
+    // not in the render-path formatter.
+    const validation = await validateBody(request, CreateTransactionSchema, {
+      log,
+      operation: 'transaction.create',
+    })
+    if (!validation.success) return validation.response
+    const { date, description, amount, currency, category, notes } = validation.data
+
+    const { data: transaction, error } = await supabase
+      .from('transactions')
+      .insert({
+        company_id: companyId,
+        user_id: user.id,
+        date,
+        description,
+        amount,
+        currency,
+        category: category ?? 'uncategorized',
+        is_business: null,
+        notes: notes ?? '',
+      })
+      .select()
+      .single()
+
+    if (error) {
+      // A DB-level rejection here (e.g. the transactions_date_sane_range CHECK)
+      // is invalid input, not a server fault — surface it as 400 with the PG
+      // code so the client maps it to a friendly message.
+      return NextResponse.json(
+        { error: error.message, code: error.code, type: 'database_error' },
+        { status: 400 },
+      )
+    }
+
+    return NextResponse.json({ data: transaction }, { status: 201 })
+  },
+  { requireWrite: true },
+)

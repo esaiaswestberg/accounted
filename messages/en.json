@@ -1943,6 +1943,7 @@
   },
   "tx_form": {
     "date_required": "Date is required",
+    "date_invalid": "Enter a valid date (YYYY-MM-DD)",
     "description_required": "Description is required",
     "amount_required": "Amount must be entered",
     "date_label": "Date *",

@@ -1943,6 +1943,7 @@
   },
   "tx_form": {
     "date_required": "Datum krävs",
+    "date_invalid": "Ange ett giltigt datum (ÅÅÅÅ-MM-DD)",
     "description_required": "Beskrivning krävs",
     "amount_required": "Belopp måste anges",
     "date_label": "Datum *",

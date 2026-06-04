@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
+import { isSaneDateString } from '@/lib/utils'
 
 // ============================================================
 // Shared primitives
@@ -10,6 +11,16 @@ const uuid = z.string().uuid()
 
 /** ISO date string (YYYY-MM-DD) */
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD date format')
+
+/**
+ * ISO date that must also be a real, in-range calendar date — not just the
+ * right shape. Backed by the shared `isSaneDateString` rule (also used by the
+ * transaction form) so a 6-digit year or impossible date can't slip through
+ * for user-entered dates. Use this over `isoDate` for free-text date input.
+ */
+const saneIsoDate = z
+  .string()
+  .refine(isSaneDateString, 'Invalid or out-of-range date (expected YYYY-MM-DD, year 1900–2100)')
 
 /** BAS account number — always a string of 4 digits */
 const accountNumber = z.string().regex(/^\d{4}$/, 'Account number must be exactly 4 digits')
@@ -508,6 +519,24 @@ export const RecordateJournalEntrySchema = z.object({
 // ============================================================
 // Transaction schemas
 // ============================================================
+
+/**
+ * Manual bank-transaction creation (the "Lägg till transaktion" form).
+ *
+ * The authoritative server-side boundary for that flow. Historically the form
+ * inserted straight into Supabase from the browser with only
+ * `z.string().min(1)` on the date, which let a corrupt 6-digit year through and
+ * crashed the page on render. The form reuses `isSaneDateString` (via this
+ * schema's `saneIsoDate`) so the date rule is single-sourced across layers.
+ */
+export const CreateTransactionSchema = z.object({
+  date: saneIsoDate,
+  description: z.string().min(1, 'Description is required').max(500),
+  amount: z.number().refine((n) => n !== 0, 'Amount must not be zero'),
+  currency: CurrencySchema,
+  category: TransactionCategorySchema.optional(),
+  notes: z.string().max(2000).optional(),
+})
 
 export const CategorizeTransactionSchema = z.object({
   is_business: z.boolean(),

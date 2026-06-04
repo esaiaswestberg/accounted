@@ -1208,37 +1208,39 @@ export default function TransactionsPage() {
 
   async function handleCreateTransaction(data: CreateTransactionInput) {
     setIsCreating(true)
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) {
-      toast({ title: t('login_required_title'), description: t('login_required_description'), variant: 'destructive' })
-      setIsCreating(false)
-      return
-    }
-
-    const { data: transaction, error } = await supabase
-      .from('transactions')
-      .insert({
-        company_id: company!.id,
-        user_id: user.id,
-        date: data.date,
-        description: data.description,
-        amount: data.amount,
-        currency: data.currency,
-        category: data.category || 'uncategorized',
-        is_business: null,
-        notes: data.notes,
+    try {
+      // Create through the server route so the payload is validated server-side
+      // (shared CreateTransactionSchema) and the DB CHECK applies — the browser
+      // client must never be the only guard on a mutation.
+      const response = await fetch('/api/transactions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date: data.date,
+          description: data.description,
+          amount: data.amount,
+          currency: data.currency,
+          category: data.category,
+          notes: data.notes,
+        }),
       })
-      .select()
-      .single()
-
-    if (error) {
-      toast({ title: 'Kunde inte skapa transaktion', description: error.message, variant: 'destructive' })
-    } else {
+      const result = await response.json()
+      if (!response.ok) {
+        toast({
+          title: 'Kunde inte skapa transaktion',
+          description: getErrorMessage(result, { context: 'transaction', statusCode: response.status }),
+          variant: 'destructive',
+        })
+        return
+      }
       toast({ title: 'Transaktion tillagd', description: `${data.description} har lagts till` })
-      setTransactions([transaction, ...transactions])
+      setTransactions([result.data, ...transactions])
       setIsDialogOpen(false)
+    } catch {
+      toast({ title: 'Kunde inte skapa transaktion', description: t('booking_failed_description'), variant: 'destructive' })
+    } finally {
+      setIsCreating(false)
     }
-    setIsCreating(false)
   }
 
   async function handleDeleteTransaction(id: string) {
