@@ -718,8 +718,22 @@ async function commitSendInvoice(
     .single()
 
   if (invoiceError || !invoice) return { error: 'Invoice not found', status: 404 }
-  if (invoice.status === 'sent' || invoice.status === 'paid' || invoice.status === 'overdue') {
+  // partially_paid/credited imply the invoice was already issued too — the
+  // status flip below would regress them to 'sent' (PR #666 review, ASVS V2.3).
+  if (['sent', 'paid', 'overdue', 'partially_paid', 'credited'].includes(invoice.status)) {
     return { error: 'Invoice has already been sent', status: 409 }
+  }
+  // A cancelled invoice keeps its F-series number for ML 17 kap 24§ compliance
+  // but is not a valid faktura — sending it would silently re-activate it (the
+  // status flip below has no guard) and deliver a "MAKULERAD" PDF as if live.
+  // Mirrors the send route's guard (audit C17 — this agent path lacked it).
+  if (invoice.status === 'cancelled') {
+    return {
+      error:
+        getErrorEntry('INVOICE_SEND_CANCELLED')?.message_sv ??
+        'Makulerade fakturor kan inte skickas. Skapa en ny faktura istället.',
+      status: 400,
+    }
   }
 
   const customer = invoice.customer as Customer
@@ -730,12 +744,6 @@ async function commitSendInvoice(
 
   if (companyError || !company) return { error: 'Company settings missing', status: 500 }
 
-  try {
-    await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
-  } catch (err) {
-    return { error: `Failed to assign invoice number: ${err instanceof Error ? err.message : 'unknown'}`, status: 500 }
-  }
-
   const items = (invoice.items as InvoiceItem[]).sort(
     (a: InvoiceItem, b: InvoiceItem) => a.sort_order - b.sort_order
   )
@@ -745,6 +753,47 @@ async function commitSendInvoice(
     const { data: orig } = await supabase
       .from('invoices').select('invoice_number').eq('id', invoice.credited_invoice_id).single()
     if (orig) originalInvoiceNumber = orig.invoice_number
+  }
+
+  // Preflight render: validate the PDF pipeline BEFORE consuming an F-series
+  // number, so a render failure can't leave a numbered-but-never-issued
+  // invoice (an F-series gap if the draft is later abandoned). Skipped when
+  // the row is already numbered (retry path) — we'd render twice for no gain.
+  // Mirrors the send route (audit C17 — this agent path assigned the number
+  // first and rendered unguarded).
+  const isFreshAllocation = !invoice.invoice_number
+  if (isFreshAllocation) {
+    try {
+      const preflight = prepareInvoicePdfRender(company as CompanySettings)
+      await renderToBuffer(
+        InvoicePDF({
+          invoice: { ...(invoice as Invoice), invoice_number: 'F-PREVIEW' },
+          customer,
+          items,
+          company: company as CompanySettings,
+          originalInvoiceNumber,
+          branding: preflight.branding,
+        })
+      )
+    } catch (err) {
+      log.error('preflight PDF render failed before invoice number assignment (agent send)', err as Error, {
+        companyId,
+        userId,
+        invoiceId,
+      })
+      return {
+        error:
+          getErrorEntry('INVOICE_SEND_PDF_RENDER_FAILED')?.message_sv ??
+          'Fakturans PDF kunde inte skapas. Kontrollera fakturarader och kunduppgifter och försök igen.',
+        status: 500,
+      }
+    }
+  }
+
+  try {
+    await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
+  } catch (err) {
+    return { error: `Failed to assign invoice number: ${err instanceof Error ? err.message : 'unknown'}`, status: 500 }
   }
 
   // Override `status` to 'sent' on the in-memory copy. The DB flip happens

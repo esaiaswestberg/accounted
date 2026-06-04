@@ -38,6 +38,8 @@ async function insertSupplier(params: {
   return id
 }
 
+let arrivalSeq = 0
+
 async function insertSupplierInvoice(params: {
   userId: string
   companyId: string
@@ -48,10 +50,12 @@ async function insertSupplierInvoice(params: {
   dueDate?: string
 }): Promise<string> {
   const id = randomUUID()
-  // Arrival numbers are generated per-company by get_next_arrival_number,
-  // but for an isolated test we can hardcode a unique value via current time
-  // millis modulo a wide range. The unique constraint allows that.
-  const arrivalNumber = (Date.now() % 1_000_000_000) + Math.floor(Math.random() * 10_000)
+  // Arrival numbers are generated per-company by get_next_arrival_number, but
+  // for an isolated test we hardcode a unique value: time component for
+  // cross-run uniqueness, counter for within-run uniqueness. The previous
+  // Date.now()+random scheme collided in CI (same ms + overlapping random
+  // ranges → duplicate key on idx_supplier_invoices_company_arrival_number).
+  const arrivalNumber = (Date.now() % 1_000_000) * 1000 + arrivalSeq++
   await getPool().query(
     `INSERT INTO public.supplier_invoices
        (id, user_id, company_id, supplier_id, arrival_number, supplier_invoice_number,

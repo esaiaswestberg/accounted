@@ -18,6 +18,7 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { roundOre } from '@/lib/money'
 import { getRevenueAccount, getOutputVatAccount } from '@/lib/bookkeeping/invoice-entries'
 import { buildInvoicePaymentClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
@@ -185,15 +186,18 @@ export const GET = withRouteContext(
       const isForeign = inv.currency !== 'SEK'
 
       // Per-item rate aggregation (matches generatePerRateLines semantics).
-      // InvoiceItem.line_total is the gross-net-line; the subtotal contribution
-      // is line_total minus that line's vat_amount.
+      // InvoiceItem.line_total is the NET line amount (EXCLUDES VAT) — it sums
+      // to invoice.subtotal, and each line's vat_amount = line_total * rate. The
+      // commit path (generatePerRateLines) credits revenue with line_total
+      // directly; subtracting vat here double-subtracts VAT and unbalances the
+      // previewed verifikat against the 1930 debit (inv.total).
       const byRate = new Map<number, { subtotal: number; vat: number }>()
       if (items.length > 0) {
         for (const it of items) {
           const rate = it.vat_rate ?? 25
           const itemVat = resolveSekAmount(it.vat_amount, null, inv.currency, inv.exchange_rate)
           const itemTotal = resolveSekAmount(it.line_total, null, inv.currency, inv.exchange_rate)
-          const sub = Math.round((itemTotal - itemVat) * 100) / 100
+          const sub = roundOre(itemTotal)
           const bucket = byRate.get(rate) ?? { subtotal: 0, vat: 0 }
           bucket.subtotal += sub
           bucket.vat += itemVat

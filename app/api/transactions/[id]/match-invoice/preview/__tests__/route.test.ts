@@ -141,4 +141,65 @@ describe('GET /api/transactions/[id]/match-invoice/preview', () => {
     expect(body.fx_conversion.required).toBe(false)
     expect(mockFetchExchangeRate).not.toHaveBeenCalled()
   })
+
+  // Regression for the F-2026080 bug: the cash-entry preview double-subtracted
+  // VAT (sub = line_total - vat_amount) even though line_total is ALREADY the
+  // net line amount, producing 3001=3127.5 against a 1930 debit of 5212.5 — an
+  // unbalanced verifikat. The existing 'same-currency full payment' test above
+  // uses an itemless invoice, so it only hits the fallback branch and never the
+  // buggy per-item loop. This invoice mirrors F-2026080 exactly.
+  it('multi-item SEK cash entry balances (line_total is net, not gross)', async () => {
+    const tx = makeTransaction({
+      id: 'tx-3',
+      amount: 5213,
+      currency: 'SEK',
+      date: '2026-05-18',
+      invoice_id: null,
+    })
+    const invoice = {
+      ...makeInvoice({
+        id: VALID_UUID,
+        status: 'sent',
+        currency: 'SEK',
+        total: 5212.5,
+        subtotal: 4170,
+        vat_amount: 1042.5,
+        remaining_amount: 5212.5,
+        paid_amount: 0,
+      }),
+      // line_total is NET (excludes VAT); each vat_amount = line_total * 0.25.
+      items: [
+        { vat_rate: 25, line_total: 420, vat_amount: 105 },
+        { vat_rate: 25, line_total: 1500, vat_amount: 375 },
+        { vat_rate: 25, line_total: 2250, vat_amount: 562.5 },
+      ],
+    }
+    enqueue({ data: tx, error: null })
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
+
+    const request = createMockRequest('/api/transactions/tx-3/match-invoice/preview', {
+      searchParams: { invoice_id: VALID_UUID },
+    })
+    const response = await GET(request, createMockRouteParams({ id: 'tx-3' }))
+    const { status, body } = await parseJsonResponse<{
+      entry_type: string
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.entry_type).toBe('cash')
+
+    const totalDebit = body.lines.reduce((s, l) => s + l.debit_amount, 0)
+    const totalCredit = body.lines.reduce((s, l) => s + l.credit_amount, 0)
+    // The crux: the previewed verifikat must balance.
+    expect(Math.round((totalDebit - totalCredit) * 100)).toBe(0)
+
+    const revenue = body.lines.find((l) => l.account_number === '3001')
+    const vat = body.lines.find((l) => l.account_number === '2611')
+    const bank = body.lines.find((l) => l.account_number === '1930')
+    expect(revenue?.credit_amount).toBe(4170) // net subtotal, NOT 3127.5
+    expect(vat?.credit_amount).toBe(1042.5)
+    expect(bank?.debit_amount).toBe(5212.5)
+  })
 })
