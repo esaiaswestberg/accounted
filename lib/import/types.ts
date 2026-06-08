@@ -234,6 +234,10 @@ export interface ImportOptions {
 
   // Voucher series to use for imported entries
   voucherSeries?: string
+
+  // Opt-in: mark imported verifikat as "Inget underlag krävs" so a migration
+  // doesn't flood "Att hantera: saknade underlag". OFF by default.
+  markImportedNoDocRequired?: boolean
 }
 
 /**

@@ -10,6 +10,8 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Table, TableHeader, TableBody, TableFooter, TableHead, TableRow, TableCell } from '@/components/ui/table'
 import {
   Dialog,
   DialogContent,
@@ -25,7 +27,7 @@ import {
   ALL_YEARS_VALUE as FISCAL_YEAR_ALL_VALUE,
 } from '@/components/common/FiscalYearSelector'
 import { ChevronDown, ChevronRight, Paperclip, AlertTriangle, CircleSlash, Loader2, BookOpen, X, Copy, Lock, Search, SlidersHorizontal } from 'lucide-react'
-import { formatDate } from '@/lib/utils'
+import { formatDate, formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { Input } from '@/components/ui/input'
 import { AccountNumber } from '@/components/ui/account-number'
@@ -72,6 +74,13 @@ export default function JournalEntryList() {
   const [attachmentCounts, setAttachmentCounts] = useState<Record<string, number>>({})
   const [noDocRequired, setNoDocRequired] = useState<Map<string, string | null>>(new Map())
   const [showMissingOnly, setShowMissingOnly] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [batchReason, setBatchReason] = useState('')
+  const [batchSubmitting, setBatchSubmitting] = useState(false)
+  const [bulkOpen, setBulkOpen] = useState(false)
+  const [bulkCount, setBulkCount] = useState<number | null>(null)
+  const [bulkReason, setBulkReason] = useState('')
+  const [bulkSubmitting, setBulkSubmitting] = useState(false)
   const [correctionEntry, setCorrectionEntry] = useState<JournalEntry | null>(null)
   const [previewEntryId, setPreviewEntryId] = useState<string | null>(null)
   const [sortBy, setSortBy] = useState<SortBy>('date_desc')
@@ -230,6 +239,7 @@ export default function JournalEntryList() {
 
   async function fetchEntries() {
     setLoading(true)
+    setSelectedIds(new Set()) // selection is page-scoped — reset on reload
     const params = new URLSearchParams({
       limit: String(pageSize),
       offset: String(page * pageSize),
@@ -292,6 +302,120 @@ export default function JournalEntryList() {
     }
   }
 
+  // A posted, document-requiring entry with no attachment yet and not already
+  // exempt — i.e. the rows that show the warning triangle. Only these can be
+  // batch-marked "Inget underlag krävs".
+  const isEligibleForExempt = useCallback(
+    (entry: JournalEntry) =>
+      entry.status === 'posted' &&
+      NEEDS_ATTACHMENT.has(entry.source_type) &&
+      !attachmentCounts[entry.id] &&
+      !noDocRequired.has(entry.id),
+    [attachmentCounts, noDocRequired],
+  )
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const handleBatchExempt = async () => {
+    const ids = Array.from(selectedIds)
+    if (ids.length === 0) return
+    setBatchSubmitting(true)
+    const reason = batchReason.trim() || null
+    try {
+      const res = await fetch('/api/bookkeeping/no-doc-required/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ journal_entry_ids: ids, reason }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast({ title: t('no_doc_required_save_failed'), description: body.error, variant: 'destructive' })
+        return
+      }
+      // Reflect the new exemptions locally: triangle → muted "no doc" indicator.
+      setNoDocRequired((prev) => {
+        const next = new Map(prev)
+        for (const id of ids) next.set(id, reason)
+        return next
+      })
+      setSelectedIds(new Set())
+      setBatchReason('')
+      toast({
+        title: t('batch_no_doc_done_title'),
+        description: t('batch_no_doc_done_description', { count: body.data?.exempted ?? ids.length }),
+      })
+    } catch {
+      toast({ title: t('no_doc_required_save_failed'), variant: 'destructive' })
+    } finally {
+      setBatchSubmitting(false)
+    }
+  }
+
+  // Filter-scoped bulk mark: mark EVERY missing-doc verifikat matching the active
+  // filters (period/series/date/search), across all pages — the scalable remedy
+  // for a post-import flood. A dry_run first surfaces the exact count to confirm.
+  const filterPayload = () => ({
+    period_id: periodId,
+    series: seriesFilter !== 'all' ? seriesFilter : null,
+    date_from: dateFrom || null,
+    date_to: dateTo || null,
+    search: search || null,
+  })
+
+  const openBulk = async () => {
+    setBulkOpen(true)
+    setBulkCount(null)
+    setBulkReason('')
+    try {
+      const res = await fetch('/api/bookkeeping/no-doc-required/bulk-missing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...filterPayload(), dry_run: true }),
+      })
+      const body = await res.json().catch(() => ({}))
+      setBulkCount(res.ok ? (body.data?.count ?? 0) : 0)
+    } catch {
+      setBulkCount(0)
+    }
+  }
+
+  const handleBulkConfirm = async () => {
+    setBulkSubmitting(true)
+    try {
+      const res = await fetch('/api/bookkeeping/no-doc-required/bulk-missing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...filterPayload(), reason: bulkReason.trim() || null }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast({ title: t('no_doc_required_save_failed'), description: body.error, variant: 'destructive' })
+        return
+      }
+      setBulkOpen(false)
+      setBulkCount(null)
+      setBulkReason('')
+      setSelectedIds(new Set())
+      toast({
+        title: t('batch_no_doc_done_title'),
+        description: t('batch_no_doc_done_description', { count: body.data?.exempted ?? 0 }),
+      })
+      await fetchNoDocRequired()
+      await fetchEntries()
+    } catch {
+      toast({ title: t('no_doc_required_save_failed'), variant: 'destructive' })
+    } finally {
+      setBulkSubmitting(false)
+    }
+  }
+
   const filteredEntries = showMissingOnly
     ? entries.filter(
         (e) =>
@@ -346,6 +470,22 @@ export default function JournalEntryList() {
     setDateFromInput('')
     setDateToInput('')
     setPage(0)
+  }
+
+  // Rows on this page the user can batch-mark "Inget underlag krävs".
+  const eligibleEntries = canWrite ? filteredEntries.filter(isEligibleForExempt) : []
+  const allEligibleSelected =
+    eligibleEntries.length > 0 && eligibleEntries.every((e) => selectedIds.has(e.id))
+  const toggleSelectAll = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (allEligibleSelected) {
+        for (const e of eligibleEntries) next.delete(e.id)
+      } else {
+        for (const e of eligibleEntries) next.add(e.id)
+      }
+      return next
+    })
   }
 
   if (!loading && entries.length === 0 && !hasActiveFilters) {
@@ -578,6 +718,66 @@ export default function JournalEntryList() {
         </div>
       )}
 
+      {/* Batch-mark "Inget underlag krävs": select-all + contextual action bar */}
+      {(eligibleEntries.length > 0 || selectedIds.size > 0) && (
+        <div className="flex flex-col gap-3 rounded-lg border border-border bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id="select-all-missing"
+              checked={allEligibleSelected}
+              onCheckedChange={toggleSelectAll}
+              disabled={eligibleEntries.length === 0}
+            />
+            <Label htmlFor="select-all-missing" className="text-sm cursor-pointer">
+              {selectedIds.size > 0
+                ? t('batch_selected_count', { count: selectedIds.size })
+                : t('batch_select_all', { count: eligibleEntries.length })}
+            </Label>
+          </div>
+          {selectedIds.size > 0 ? (
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <Input
+                value={batchReason}
+                onChange={(e) => setBatchReason(e.target.value)}
+                placeholder={t('no_doc_required_reason_placeholder')}
+                list="batch-no-doc-suggestions"
+                maxLength={200}
+                className="h-8 text-xs sm:w-56"
+                disabled={batchSubmitting}
+              />
+              <datalist id="batch-no-doc-suggestions">
+                <option value={t('no_doc_required_suggestion_bank_fee')} />
+                <option value={t('no_doc_required_suggestion_interest')} />
+                <option value={t('no_doc_required_suggestion_internal_transfer')} />
+                <option value={t('no_doc_required_suggestion_tax_payment')} />
+                <option value={t('no_doc_required_suggestion_salary')} />
+              </datalist>
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={handleBatchExempt} disabled={batchSubmitting}>
+                  {batchSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  {t('batch_mark_no_doc')}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setSelectedIds(new Set())}
+                  disabled={batchSubmitting}
+                >
+                  {t('batch_clear_selection')}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            // Filter-scoped: mark every missing-doc verifikat matching the active
+            // filters across all pages — scales to a post-import flood.
+            <Button size="sm" variant="outline" onClick={openBulk}>
+              <CircleSlash className="mr-2 h-4 w-4" />
+              {t('batch_mark_all_missing')}
+            </Button>
+          )}
+        </div>
+      )}
+
       {loading ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12">
@@ -602,13 +802,26 @@ export default function JournalEntryList() {
         {filteredEntries.map((entry) => {
           const isExpanded = expandedId === entry.id
           const lines = (entry.lines || []) as JournalEntryLine[]
+          // Voucher total = sum of the debit side (= credit side when balanced).
+          const voucherTotal = lines.reduce((sum, l) => sum + (Number(l.debit_amount) || 0), 0)
+          const selectable = canWrite && isEligibleForExempt(entry)
 
           return (
             <Card key={entry.id}>
+              <div className="flex items-stretch">
+                {selectable && (
+                  <div className="flex items-center pl-3" onClick={(e) => e.stopPropagation()}>
+                    <Checkbox
+                      checked={selectedIds.has(entry.id)}
+                      onCheckedChange={() => toggleSelect(entry.id)}
+                      aria-label={t('batch_select_row')}
+                    />
+                  </div>
+                )}
               <button
                 onClick={() => toggleExpand(entry.id)}
                 aria-expanded={isExpanded}
-                className="w-full p-4 text-left hover:bg-muted/50 transition-colors min-h-[44px]"
+                className="flex-1 min-w-0 p-4 text-left hover:bg-muted/50 transition-colors min-h-[44px]"
               >
                 {/* Desktop: single row */}
                 <div className="hidden sm:flex items-center gap-3 flex-1">
@@ -640,6 +853,9 @@ export default function JournalEntryList() {
                     <JournalEntryStatusBadge entry={entry} showStatus={entry.status === 'reversed' || entry.status === 'draft'} />
                   )}
                   <span className="flex-1 truncate">{entry.description}</span>
+                  <span className="shrink-0 w-28 text-right tabular-nums text-sm font-medium">
+                    {formatCurrency(voucherTotal)}
+                  </span>
                   <Button
                     asChild
                     variant="ghost"
@@ -816,65 +1032,83 @@ export default function JournalEntryList() {
                       )}
                     </span>
                   </div>
-                  <p className="mt-1 ml-6 text-sm truncate">{entry.description}</p>
+                  <div className="mt-1 ml-6 flex items-center justify-between gap-2">
+                    <p className="text-sm truncate">{entry.description}</p>
+                    <span className="shrink-0 tabular-nums text-sm font-medium">
+                      {formatCurrency(voucherTotal)}
+                    </span>
+                  </div>
                 </div>
               </button>
+              </div>
 
               {isExpanded && (
                 <CardContent className="pt-0 pb-4">
                   {lines.length === 0 ? (
                     <p className="text-sm text-muted-foreground py-2">{t('no_lines')}</p>
                   ) : (
-                  <>
-                    <div className="space-y-3">
-                      {lines
-                        .sort((a, b) => a.sort_order - b.sort_order)
-                        .map((line) => {
-                          const accountName = getAccountDescription(line.account_number)?.name
-                          const desc = line.line_description
-                          const showDesc = desc
-                            && desc.toLowerCase() !== accountName?.toLowerCase()
-                            && desc.toLowerCase() !== entry.description?.toLowerCase()
-                          return (
-                          <div key={line.id} className="rounded-lg border p-3 space-y-1.5">
-                            <div className="text-sm">
-                              <AccountNumber number={line.account_number} showName />
-                            </div>
-                            {showDesc && (
-                              <p className="text-xs text-muted-foreground">{desc}</p>
-                            )}
-                            <div className="flex justify-between items-center pt-1 border-t text-sm">
-                              <span className="text-muted-foreground">
-                                {Number(line.debit_amount) > 0 ? t('debit') : t('credit')}
-                              </span>
-                              <div className="text-right">
-                                <span className="font-mono tabular-nums font-medium">
-                                  {Number(line.debit_amount) > 0
-                                    ? Number(line.debit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })
-                                    : Number(line.credit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
-                                </span>
-                                {line.currency && line.currency !== 'SEK' && line.amount_in_currency != null && (
-                                  <span className="block text-xs text-muted-foreground font-mono tabular-nums">
-                                    {Number(line.amount_in_currency).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} {line.currency}
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                          )
-                        })}
-                      <div className="rounded-lg bg-muted/50 p-3 text-sm font-semibold space-y-1">
-                        <div className="flex justify-between">
-                          <span>{t('sum_debit')}</span>
-                          <span className="font-mono tabular-nums">{lines.reduce((sum, l) => sum + (Number(l.debit_amount) || 0), 0).toLocaleString('sv-SE', { minimumFractionDigits: 2 })}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>{t('sum_credit')}</span>
-                          <span className="font-mono tabular-nums">{lines.reduce((sum, l) => sum + (Number(l.credit_amount) || 0), 0).toLocaleString('sv-SE', { minimumFractionDigits: 2 })}</span>
-                        </div>
-                      </div>
-                    </div>
-                  </>
+                  <div className="rounded-lg border overflow-hidden">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>{t('account_column')}</TableHead>
+                          <TableHead>{t('description_column')}</TableHead>
+                          <TableHead className="text-right">{t('debit')}</TableHead>
+                          <TableHead className="text-right">{t('credit')}</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {lines
+                          .slice()
+                          .sort((a, b) => a.sort_order - b.sort_order)
+                          .map((line) => {
+                            const accountName = getAccountDescription(line.account_number)?.name
+                            const desc = line.line_description
+                            const showDesc = desc
+                              && desc.toLowerCase() !== accountName?.toLowerCase()
+                              && desc.toLowerCase() !== entry.description?.toLowerCase()
+                            const debit = Number(line.debit_amount) || 0
+                            const credit = Number(line.credit_amount) || 0
+                            const fx = line.currency && line.currency !== 'SEK' && line.amount_in_currency != null
+                              ? `${Number(line.amount_in_currency).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} ${line.currency}`
+                              : null
+                            return (
+                              <TableRow key={line.id}>
+                                <TableCell className="align-top whitespace-nowrap">
+                                  <AccountNumber number={line.account_number} showName />
+                                </TableCell>
+                                <TableCell className="align-top text-muted-foreground">
+                                  {showDesc ? desc : ''}
+                                </TableCell>
+                                <TableCell className="align-top text-right tabular-nums">
+                                  {debit > 0 ? debit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) : ''}
+                                  {debit > 0 && fx && (
+                                    <span className="block text-xs text-muted-foreground tabular-nums">{fx}</span>
+                                  )}
+                                </TableCell>
+                                <TableCell className="align-top text-right tabular-nums">
+                                  {credit > 0 ? credit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) : ''}
+                                  {credit > 0 && fx && (
+                                    <span className="block text-xs text-muted-foreground tabular-nums">{fx}</span>
+                                  )}
+                                </TableCell>
+                              </TableRow>
+                            )
+                          })}
+                      </TableBody>
+                      <TableFooter>
+                        <TableRow>
+                          <TableCell colSpan={2} className="font-medium">{t('sum_label')}</TableCell>
+                          <TableCell className="text-right tabular-nums font-medium">
+                            {lines.reduce((sum, l) => sum + (Number(l.debit_amount) || 0), 0).toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums font-medium">
+                            {lines.reduce((sum, l) => sum + (Number(l.credit_amount) || 0), 0).toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
+                          </TableCell>
+                        </TableRow>
+                      </TableFooter>
+                    </Table>
+                  </div>
                   )}
 
                   {entry.notes && (
@@ -948,6 +1182,67 @@ export default function JournalEntryList() {
         })}
       </div>
       )}
+
+      {/* Filter-scoped bulk "Inget underlag krävs" confirmation */}
+      <Dialog
+        open={bulkOpen}
+        onOpenChange={(o) => {
+          if (bulkSubmitting) return
+          setBulkOpen(o)
+          if (!o) {
+            setBulkCount(null)
+            setBulkReason('')
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('bulk_mark_title')}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            {bulkCount === null ? (
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {t('bulk_mark_counting')}
+              </div>
+            ) : bulkCount === 0 ? (
+              <p className="text-muted-foreground">{t('bulk_mark_none')}</p>
+            ) : (
+              <>
+                <p>{t('bulk_mark_body', { count: bulkCount })}</p>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">{t('no_doc_required_reason_add')}</Label>
+                  <Input
+                    value={bulkReason}
+                    onChange={(e) => setBulkReason(e.target.value)}
+                    placeholder={t('no_doc_required_reason_placeholder')}
+                    list="bulk-no-doc-suggestions"
+                    maxLength={200}
+                    className="h-8 text-xs"
+                    disabled={bulkSubmitting}
+                  />
+                  <datalist id="bulk-no-doc-suggestions">
+                    <option value={t('no_doc_required_suggestion_bank_fee')} />
+                    <option value={t('no_doc_required_suggestion_interest')} />
+                    <option value={t('no_doc_required_suggestion_internal_transfer')} />
+                    <option value={t('no_doc_required_suggestion_tax_payment')} />
+                    <option value={t('no_doc_required_suggestion_salary')} />
+                  </datalist>
+                </div>
+              </>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setBulkOpen(false)} disabled={bulkSubmitting}>
+              {t('bulk_cancel')}
+            </Button>
+            <Button size="sm" onClick={handleBulkConfirm} disabled={bulkSubmitting || !bulkCount}>
+              {bulkSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {t('bulk_mark_confirm', { count: bulkCount ?? 0 })}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Correction dialog */}
       {correctionEntry && (

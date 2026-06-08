@@ -34,6 +34,7 @@ import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { classifyAccount } from '@/lib/bookkeeping/account-classifier'
 import { computeSRUCode } from '@/lib/bookkeeping/bas-data/sru-mapping'
 import { populateTemplatesFromSieVouchers } from '@/lib/bookkeeping/counterparty-templates'
+import { markEntriesNoDocRequired } from '@/lib/bookkeeping/no-doc-required'
 import { parseDateParts } from '@/lib/bookkeeping/validate-period-duration'
 
 /**
@@ -871,6 +872,10 @@ export async function importVouchers(
 ): Promise<{
   created: number
   ids: string[]
+  // Subset of `ids` whose entries were inserted with source_type='import' (i.e.
+  // excludes #VER vouchers re-tagged as opening_balance). Used to scope the
+  // opt-in "Inget underlag krävs" auto-exemption to genuinely migrated vouchers.
+  importTypedIds: string[]
   errors: string[]
   skippedEmpty: number
   skippedSingleLine: number
@@ -898,6 +903,7 @@ export async function importVouchers(
   const results = {
     created: 0,
     ids: [] as string[],
+    importTypedIds: [] as string[],
     errors: [] as string[],
     skippedEmpty: 0,
     skippedSingleLine: 0,
@@ -1287,6 +1293,11 @@ export async function importVouchers(
       })
 
       results.ids.push(entryId)
+      // #VER vouchers re-tagged as opening_balance never need an underlag and
+      // aren't in NEEDS_DOC_SOURCE_TYPES, so keep them out of the exempt set.
+      if (voucher.sourceType === 'import') {
+        results.importTypedIds.push(entryId)
+      }
       results.created++
     }
 
@@ -1864,6 +1875,10 @@ export async function executeSIEImport(
     voucherSeries?: string
     onExistingPeriod?: 'block' | 'replace'
     updateAccountNames?: boolean
+    // Opt-in: mark every imported (source_type='import') verifikat as "Inget
+    // underlag krävs" so a multi-year migration doesn't flood "Att hantera:
+    // saknade underlag" with thousands of items. OFF by default.
+    markImportedNoDocRequired?: boolean
   }
 ): Promise<ImportResult> {
   const result: ImportResult = {
@@ -1877,6 +1892,11 @@ export async function executeSIEImport(
     warnings: [],
     replacedPriorImport: null,
   }
+
+  // Collected source_type='import' entry ids (vouchers + migration adjustment),
+  // used only when options.markImportedNoDocRequired is set. Kept separate from
+  // result.journalEntryIds because that also holds opening_balance entries.
+  const importTypedEntryIds: string[] = []
 
   const onExistingPeriod = options.onExistingPeriod ?? 'block'
   const updateAccountNames = options.updateAccountNames ?? true
@@ -2285,6 +2305,7 @@ export async function executeSIEImport(
 
       result.journalEntriesCreated += voucherResults.created
       result.journalEntryIds.push(...voucherResults.ids)
+      importTypedEntryIds.push(...voucherResults.importTypedIds)
       result.errors.push(...voucherResults.errors)
       voucherNumberMapping = voucherResults.voucherNumberMapping
       voucherSeriesUsed = voucherResults.seriesUsed
@@ -2346,6 +2367,8 @@ export async function executeSIEImport(
           if (adjustment.entryId) {
             result.journalEntriesCreated++
             result.journalEntryIds.push(adjustment.entryId)
+            // The omföringsverifikation is source_type='import' too.
+            importTypedEntryIds.push(adjustment.entryId)
             result.warnings.push(
               `Migreringsjustering skapad: ${adjustment.deltaAccounts} konton justerade för att matcha UB/RES från källsystemet`
             )
@@ -2498,6 +2521,28 @@ export async function executeSIEImport(
         }
       } catch (templateError) {
         console.error('[sie-import] Failed to populate counterparty templates:', templateError)
+      }
+    }
+
+    // Opt-in: mark imported verifikat as "Inget underlag krävs" (non-blocking).
+    // Migrated vouchers carry their underlag in the source system, so the user
+    // can choose to keep all of them out of "Att hantera: saknade underlag" in
+    // one go instead of clearing thousands of items by hand. Data is already
+    // committed at this point, so a failure here only loses the convenience.
+    if (result.success && options.markImportedNoDocRequired && importTypedEntryIds.length > 0) {
+      try {
+        await markEntriesNoDocRequired(
+          supabase,
+          companyId,
+          userId,
+          importTypedEntryIds,
+          'Importerad från tidigare system (SIE)',
+        )
+      } catch (exemptError) {
+        console.error('[sie-import] Failed to mark imported entries no-doc-required (non-fatal):', exemptError)
+        result.warnings.push(
+          'Kunde inte markera importerade verifikat som "Inget underlag krävs" — du kan markera dem manuellt i bokföringslistan.',
+        )
       }
     }
 

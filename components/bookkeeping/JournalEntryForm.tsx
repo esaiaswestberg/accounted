@@ -63,6 +63,9 @@ interface Props {
   sourceId?: string
   submitUrl?: string
   embedded?: boolean
+  /** Render without the Card chrome (e.g. inside a dialog) but keep the full
+   *  non-embedded field set (series, notes, documents, voucher hint). */
+  bare?: boolean
 }
 
 const BLANK_LINE: FormLine = { account_number: '', debit_amount: '', credit_amount: '', line_description: '' }
@@ -78,6 +81,7 @@ export default function JournalEntryForm({
   sourceId,
   submitUrl,
   embedded,
+  bare,
 }: Props) {
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
@@ -89,6 +93,7 @@ export default function JournalEntryForm({
   const [entryDate, setEntryDate] = useState(initialDate ?? new Date().toISOString().split('T')[0])
   const [description, setDescription] = useState(initialDescription ?? '')
   const [notes, setNotes] = useState(initialNotes ?? '')
+  const [showNotes, setShowNotes] = useState(false)
   const [lines, setLines] = useState<FormLine[]>(
     initialLines ?? [{ ...BLANK_LINE }, { ...BLANK_LINE }]
   )
@@ -341,6 +346,11 @@ export default function JournalEntryForm({
       const account = accounts.find((a) => a.account_number === value)
       if (account) {
         updated[index].line_description = account.account_name
+        // Fortnox-style: seed the verifikationstext from the first row's account
+        // when the user hasn't typed one yet. Non-destructive — never overwrites.
+        if (index === 0 && !description.trim()) {
+          setDescription(account.account_name)
+        }
       }
     }
 
@@ -493,7 +503,7 @@ export default function JournalEntryForm({
   const handleReview = () => {
     if (!selectedPeriod || !description || !isBalanced || periodMismatch) return
     const hasDocuments = uploadedFiles.some((f) => f.status === 'uploaded')
-    if (!embedded && !hasDocuments) {
+    if (!embedded && !bare && !hasDocuments) {
       setShowNoDocWarning(true)
       return
     }
@@ -668,125 +678,190 @@ export default function JournalEntryForm({
     }
   }
 
-  const formContent = (
+  // Inline review for the modal (bare): swap the form body to a read-only
+  // summary instead of stacking a second dialog over the form dialog. The
+  // no-underlag caveat folds in here so there's a single confirm step.
+  const reviewPanel = (
     <div className="space-y-4">
-      <div className={`grid gap-4 grid-cols-1 ${
-        embedded && initialDate
-          ? 'sm:grid-cols-2'
-          : embedded
-            ? 'sm:grid-cols-3'
-            : 'sm:grid-cols-[1fr_auto_1fr_3.5rem]'
-      }`}>
-        <div>
-          <Label>{t('fiscal_year')}</Label>
-          <Select value={selectedPeriod} onValueChange={setSelectedPeriod}>
-            <SelectTrigger className="mt-1">
-              <SelectValue placeholder={t('fiscal_year_placeholder')} />
-            </SelectTrigger>
-            <SelectContent>
-              {periods.map((p) => (
-                <SelectItem key={p.id} value={p.id}>
-                  {p.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        {!(embedded && initialDate) && (
-          <div>
-            <Label>{t('date')}</Label>
-            <Input
-              type="date"
-              value={entryDate}
-              onChange={(e) => setEntryDate(e.target.value)}
-            />
-          </div>
-        )}
-        <div>
-          <Label>{t('description')}</Label>
-          <Input
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder={t('description_placeholder')}
-          />
-        </div>
-        <div className={embedded ? 'hidden' : 'col-span-full'}>
-          <Label>{t('internal_note')} <span className="text-muted-foreground font-normal">{t('internal_note_optional')}</span></Label>
-          <Textarea
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            placeholder={t('internal_note_placeholder')}
-            className="mt-1 resize-none"
-            rows={2}
-            maxLength={2000}
-          />
-        </div>
-        {!embedded && (
-          <div>
-            <Label>{t('series')}</Label>
-            <Input
-              value={voucherSeries}
-              onChange={(e) => {
-                const v = e.target.value.toUpperCase().replace(/[^A-Z]/g, '').slice(-1)
-                setVoucherSeries(v)
-              }}
-              onFocus={(e) => {
-                const target = e.target
-                setTimeout(() => target.select(), 0)
-              }}
-              onBlur={() => {
-                if (!voucherSeries) setVoucherSeries('A')
-              }}
-              className="mt-1 text-center font-mono"
-              maxLength={1}
-            />
-          </div>
-        )}
+      <div className="flex items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={() => setShowReview(false)}
+          className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          ← {t('review_back')}
+        </button>
+        <span className="font-display text-lg">
+          {nextVoucherNumber != null
+            ? t('review_title_with_voucher', { voucher: formatVoucher({ voucher_series: voucherSeries, voucher_number: nextVoucherNumber }) })
+            : t('review_title')}
+        </span>
       </div>
 
-      {/* Period mismatch warning */}
-      {periodMismatch === 'no_period' && (
+      {(monthChanged || selectedPeriodLocked) && (
         <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3">
           <AlertTriangle className="h-5 w-5 text-warning-foreground mt-0.5 shrink-0" />
-          <div className="flex-1 text-sm text-warning-foreground">
-            <p className="font-medium">{t('no_period_warning', { date: entryDate })}</p>
-            <p className="mt-0.5">{t('no_period_help')}</p>
+          <div className="flex-1 text-sm text-warning-foreground space-y-0.5">
+            {monthChanged && (
+              <p className="font-medium">
+                {t('review_month_changed', { prev: monthLabel(lastPostedMonth as string), current: monthLabel(entryMonth) })}
+              </p>
+            )}
+            {selectedPeriodLocked && <p>{t('review_period_locked')}</p>}
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowCreatePeriod(true)}
-            className="shrink-0"
-          >
-            <CalendarPlus className="h-3.5 w-3.5 mr-1.5" />
-            {t('create_period')}
-          </Button>
         </div>
       )}
 
-      {/* Currency section */}
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="w-24">
-          <Label className="text-xs text-muted-foreground">{t('currency')}</Label>
-          <Select value={entryCurrency} onValueChange={(v) => {
-            setEntryCurrency(v as Currency)
-            if (v === 'SEK') {
-              setExchangeRate('')
-              setForeignAmount('')
-            }
-          }}>
-            <SelectTrigger className="mt-1 h-8">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {CURRENCIES.map((c) => (
-                <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+      {uploadedFiles.filter((f) => f.status === 'uploaded').length === 0 && (
+        <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-warning-foreground">
+          <AlertTriangle className="h-5 w-5 mt-0.5 shrink-0" />
+          <p>{t('no_doc_body')}</p>
         </div>
+      )}
+
+      <JournalEntryReviewContent
+        periodName={periods.find((p) => p.id === selectedPeriod)?.name || ''}
+        entryDate={entryDate}
+        description={description}
+        notes={notes || undefined}
+        voucherSeries={voucherSeries}
+        lines={lines}
+        totalDebit={totalDebit}
+        totalCredit={totalCredit}
+        attachmentCount={uploadedFiles.filter((f) => f.status === 'uploaded').length}
+        showBalanceBadge
+        hideDate={false}
+      />
+
+      <div className="flex justify-end gap-2 pt-2 border-t">
+        <Button variant="outline" onClick={() => setShowReview(false)} disabled={isSubmitting}>
+          {t('review_back')}
+        </Button>
+        <Button onClick={handleConfirm} disabled={isSubmitting}>
+          {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          {/* No underlag attached → explicit acknowledgement, equivalent to the
+              blocking "Bokför utan underlag" dialog in the non-bare flow (BFL
+              5 kap 6-7 §§). With a document it's the normal create label. */}
+          {uploadedFiles.some((f) => f.status === 'uploaded')
+            ? t('review_confirm')
+            : t('no_doc_confirm')}
+        </Button>
+      </div>
+    </div>
+  )
+
+  const formContent = (
+    <div className="space-y-4">
+      {bare && showReview ? reviewPanel : (
+      <>
+      {/* Verifikat metadata — compact bar on top (Fortnox-style). Date, series
+          and period are pre-filled; the period derives from the date. The
+          konteringsrader below are the focus. */}
+      <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
+        <div className="grid gap-3 grid-cols-1 sm:grid-cols-[1fr_2fr_auto]">
+          {!(embedded && initialDate) && (
+            <div>
+              <Label className="text-xs text-muted-foreground">{t('date')}</Label>
+              <Input
+                type="date"
+                value={entryDate}
+                onChange={(e) => setEntryDate(e.target.value)}
+                className="mt-1 h-8"
+              />
+            </div>
+          )}
+          <div>
+            <Label className="text-xs text-muted-foreground">{t('description')}</Label>
+            <Input
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder={t('description_placeholder')}
+              className="mt-1 h-8"
+            />
+          </div>
+          {!embedded && (
+            <div className="w-16">
+              <Label className="text-xs text-muted-foreground">{t('series')}</Label>
+              <Input
+                value={voucherSeries}
+                onChange={(e) => {
+                  const v = e.target.value.toUpperCase().replace(/[^A-Z]/g, '').slice(-1)
+                  setVoucherSeries(v)
+                }}
+                onFocus={(e) => {
+                  const target = e.target
+                  setTimeout(() => target.select(), 0)
+                }}
+                onBlur={() => {
+                  if (!voucherSeries) setVoucherSeries('A')
+                }}
+                className="mt-1 h-8 text-center font-mono"
+                maxLength={1}
+              />
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+          {embedded ? (
+            <div className="flex items-center gap-2">
+              <Label className="text-xs text-muted-foreground">{t('fiscal_year')}</Label>
+              <Select value={selectedPeriod} onValueChange={setSelectedPeriod}>
+                <SelectTrigger className="h-7 w-auto text-xs">
+                  <SelectValue placeholder={t('fiscal_year_placeholder')} />
+                </SelectTrigger>
+                <SelectContent>
+                  {periods.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : (
+            selectedPeriodObj && (
+              <span className="text-muted-foreground">
+                {t('fiscal_year')}:{' '}
+                <span className="text-foreground">{selectedPeriodObj.name}</span>
+                {nextVoucherNumber != null && (
+                  <span className="ml-2 font-mono text-foreground">
+                    {voucherSeries}{nextVoucherNumber}
+                  </span>
+                )}
+              </span>
+            )
+          )}
+          <div className="flex items-center gap-2">
+            <Label className="text-xs text-muted-foreground">{t('currency')}</Label>
+            <Select value={entryCurrency} onValueChange={(v) => {
+              setEntryCurrency(v as Currency)
+              if (v === 'SEK') {
+                setExchangeRate('')
+                setForeignAmount('')
+              }
+            }}>
+              <SelectTrigger className="h-7 w-20 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {CURRENCIES.map((c) => (
+                  <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {!embedded && !showNotes && !notes && (
+            <button
+              type="button"
+              onClick={() => setShowNotes(true)}
+              className="text-muted-foreground hover:text-foreground transition-colors"
+            >
+              + {t('internal_note')}
+            </button>
+          )}
+        </div>
+
         {isForeign && (
-          <>
+          <div className="flex flex-wrap items-end gap-3">
             <div className="w-40">
               <Label className="text-xs text-muted-foreground">
                 {t('exchange_rate_label', { currency: entryCurrency })}
@@ -825,7 +900,43 @@ export default function JournalEntryForm({
                 {computedForeignAmount.toLocaleString('sv-SE', { minimumFractionDigits: 2 })} {entryCurrency} × {rate.toLocaleString('sv-SE', { minimumFractionDigits: 4 })} = {computedSekAmount.toLocaleString('sv-SE', { minimumFractionDigits: 2 })} SEK
               </p>
             )}
-          </>
+          </div>
+        )}
+
+        {!embedded && (showNotes || notes) && (
+          <div>
+            <Label className="text-xs text-muted-foreground">
+              {t('internal_note')}{' '}
+              <span className="font-normal">{t('internal_note_optional')}</span>
+            </Label>
+            <Textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder={t('internal_note_placeholder')}
+              className="mt-1 resize-none"
+              rows={2}
+              maxLength={2000}
+            />
+          </div>
+        )}
+
+        {periodMismatch === 'no_period' && (
+          <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3">
+            <AlertTriangle className="h-5 w-5 text-warning-foreground mt-0.5 shrink-0" />
+            <div className="flex-1 text-sm text-warning-foreground">
+              <p className="font-medium">{t('no_period_warning', { date: entryDate })}</p>
+              <p className="mt-0.5">{t('no_period_help')}</p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowCreatePeriod(true)}
+              className="shrink-0"
+            >
+              <CalendarPlus className="h-3.5 w-3.5 mr-1.5" />
+              {t('create_period')}
+            </Button>
+          </div>
         )}
       </div>
 
@@ -1127,6 +1238,8 @@ export default function JournalEntryForm({
           </div>
         )}
       </div>
+      </>
+      )}
 
       <ActivateAccountsDialog
         open={activationDialog.open}
@@ -1155,7 +1268,7 @@ export default function JournalEntryForm({
       />
 
       <ConfirmationDialog
-        open={showReview}
+        open={showReview && !bare}
         onOpenChange={setShowReview}
         onConfirm={handleConfirm}
         isSubmitting={isSubmitting}
@@ -1199,7 +1312,7 @@ export default function JournalEntryForm({
 
       {/* Warning dialog when no documents attached */}
       <ConfirmationDialog
-        open={showNoDocWarning}
+        open={showNoDocWarning && !bare}
         onOpenChange={setShowNoDocWarning}
         onConfirm={() => {
           setShowNoDocWarning(false)
@@ -1250,7 +1363,7 @@ export default function JournalEntryForm({
     </div>
   )
 
-  if (embedded) {
+  if (embedded || bare) {
     return formContent
   }
 

@@ -7,28 +7,21 @@ import { useTranslations } from 'next-intl'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
 import JournalEntryList from '@/components/bookkeeping/JournalEntryList'
-import JournalEntryForm, { type FormLine } from '@/components/bookkeeping/JournalEntryForm'
+import { type FormLine } from '@/components/bookkeeping/JournalEntryForm'
+import NewJournalEntryDialog, { type CopyPrefill } from '@/components/bookkeeping/NewJournalEntryDialog'
 import ChartOfAccountsManager from '@/components/bookkeeping/ChartOfAccountsManager'
 import { useToast } from '@/components/ui/use-toast'
-import { Lock, Loader2, Copy } from 'lucide-react'
+import { Lock, Plus } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { JournalEntry, JournalEntryLine } from '@/types'
-
-interface CopyPrefill {
-  sourceId: string
-  sourceVoucherLabel: string
-  lines: FormLine[]
-  description: string
-  notes: string
-}
 
 interface NextVoucher {
   next: number
   series: string
 }
 
-type TabValue = 'journal' | 'new-entry' | 'accounts'
+type TabValue = 'journal' | 'accounts'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -43,6 +36,7 @@ export default function BookkeepingPage() {
 
   const [refreshKey, setRefreshKey] = useState(0)
   const [activeTab, setActiveTab] = useState<TabValue>('journal')
+  const [showNewEntry, setShowNewEntry] = useState(false)
   const [copyPrefill, setCopyPrefill] = useState<CopyPrefill | null>(null)
   const [isLoadingCopy, setIsLoadingCopy] = useState(false)
   const [nextVoucher, setNextVoucher] = useState<NextVoucher | null>(null)
@@ -56,7 +50,7 @@ export default function BookkeepingPage() {
   useEffect(() => {
     if (!copyFromId) return
 
-    setActiveTab('new-entry')
+    setShowNewEntry(true)
     setCopyPrefill(null)
     setIsLoadingCopy(true)
 
@@ -136,12 +130,27 @@ export default function BookkeepingPage() {
         title={t('title')}
         action={
           <div className="flex gap-2 w-full sm:w-auto">
+            <Button
+              className="w-full sm:w-auto"
+              onClick={() => {
+                setCopyPrefill(null)
+                setShowNewEntry(true)
+              }}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              {t('tab_new_entry')}
+              {nextVoucher && (
+                <span className="ml-1 text-primary-foreground/70 tabular-nums">
+                  ({nextVoucher.series}{nextVoucher.next})
+                </span>
+              )}
+            </Button>
             <Button variant="outline" asChild className="w-full sm:w-auto">
-            <Link href="/bookkeeping/year-end">
-              <Lock className="mr-2 h-4 w-4" />
-              {t('year_end')}
-            </Link>
-          </Button>
+              <Link href="/bookkeeping/year-end">
+                <Lock className="mr-2 h-4 w-4" />
+                {t('year_end')}
+              </Link>
+            </Button>
           </div>
         }
       />
@@ -149,14 +158,6 @@ export default function BookkeepingPage() {
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabValue)}>
         <TabsList>
           <TabsTrigger value="journal">{t('tab_journal')}</TabsTrigger>
-          <TabsTrigger value="new-entry">
-            {t('tab_new_entry')}
-            {nextVoucher && (
-              <span className="ml-1 text-muted-foreground tabular-nums">
-                ({nextVoucher.series}{nextVoucher.next})
-              </span>
-            )}
-          </TabsTrigger>
           <TabsTrigger value="accounts">{t('tab_accounts')}</TabsTrigger>
         </TabsList>
 
@@ -164,45 +165,25 @@ export default function BookkeepingPage() {
           <JournalEntryList key={refreshKey} />
         </TabsContent>
 
-        <TabsContent value="new-entry" forceMount>
-          {isLoadingCopy ? (
-            <div className="flex items-center gap-2 py-12 justify-center text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <span className="text-sm">{t('loading_source_voucher')}</span>
-            </div>
-          ) : (
-            <>
-              {copyPrefill && (
-                <div className="mb-4 flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm">
-                  <Copy className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
-                  <div className="flex-1">
-                    <p className="font-medium">
-                      {t('copy_banner_title', { label: copyPrefill.sourceVoucherLabel || t('copy_banner_unknown_label') })}
-                    </p>
-                    <p className="text-muted-foreground mt-0.5">
-                      {t('copy_banner_body')}
-                    </p>
-                  </div>
-                </div>
-              )}
-              <JournalEntryForm
-                key={copyPrefill?.sourceId ?? 'fresh'}
-                onCreated={() => {
-                  setRefreshKey((k) => k + 1)
-                  setCopyPrefill(null)
-                }}
-                initialLines={copyPrefill?.lines}
-                initialDescription={copyPrefill?.description}
-                initialNotes={copyPrefill?.notes}
-              />
-            </>
-          )}
-        </TabsContent>
-
         <TabsContent value="accounts" forceMount>
           <ChartOfAccountsManager />
         </TabsContent>
       </Tabs>
+
+      <NewJournalEntryDialog
+        open={showNewEntry}
+        onOpenChange={(o) => {
+          setShowNewEntry(o)
+          if (!o) setCopyPrefill(null)
+        }}
+        onCreated={() => {
+          setRefreshKey((k) => k + 1)
+          setShowNewEntry(false)
+          setCopyPrefill(null)
+        }}
+        copyPrefill={copyPrefill}
+        isLoading={isLoadingCopy}
+      />
     </div>
   )
 }

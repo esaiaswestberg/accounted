@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
+import { Badge } from '@/components/ui/badge'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -45,6 +46,7 @@ export interface ImportExecuteOptions {
   importTransactions: boolean
   updateAccountNames: boolean
   voucherSeries: string
+  markImportedNoDocRequired: boolean
 }
 
 export default function ImportReviewStep({
@@ -62,6 +64,7 @@ export default function ImportReviewStep({
     importTransactions: true,
     updateAccountNames: true,
     voucherSeries: 'B',
+    markImportedNoDocRequired: false,
   })
   const [defaultSeries, setDefaultSeries] = useState<string | null>(null)
   const [existingSeries, setExistingSeries] = useState<Set<string>>(new Set())
@@ -146,6 +149,15 @@ export default function ImportReviewStep({
   const mappedCount = mappings.filter((m) => m.targetAccount).length
   const hasOpeningBalances = preview.openingBalanceTotal > 0
   const hasTransactions = preview.voucherCount > 0
+  // An import whose fiscal year already ended in a prior calendar year is a
+  // historical/migration import — the underlag live in the old system, so the
+  // exemption is especially apt. Nudges (does not force) the toggle.
+  const isHistoricalImport = (() => {
+    if (!preview.fiscalYearEnd) return false
+    const end = new Date(preview.fiscalYearEnd)
+    const startOfThisYear = new Date(new Date().getFullYear(), 0, 1)
+    return !isNaN(end.getTime()) && end < startOfThisYear
+  })()
   // Identity-mapped accounts whose #KONTO name differs from the BAS default —
   // mirrors the filter in syncMappedAccounts, so the count matches what the
   // import would actually rename/create with a custom name.
@@ -353,6 +365,33 @@ export default function ImportReviewStep({
               </p>
             </div>
           )}
+
+          {/* No-underlag exemption — keeps a multi-year migration from flooding
+              "Att hantera: saknade underlag" with thousands of items. */}
+          <div className="flex items-start justify-between border-t pt-6">
+            <div className="space-y-0.5 pr-4">
+              <Label htmlFor="mark-no-doc-required" className="font-medium flex items-center gap-2">
+                Markera som &quot;Inget underlag krävs&quot;
+                {isHistoricalImport && (
+                  <Badge variant="secondary" className="text-[10px] font-normal">
+                    Rekommenderas vid migrering
+                  </Badge>
+                )}
+              </Label>
+              <p className="text-sm text-muted-foreground">
+                Märker alla importerade verifikationer som att de inte behöver något
+                separat underlag — underlagen finns kvar i ditt tidigare system. Annars
+                hamnar de under &quot;Att hantera: saknade underlag&quot;. Kan ändras per
+                verifikation efteråt.
+              </p>
+            </div>
+            <Switch
+              id="mark-no-doc-required"
+              checked={options.markImportedNoDocRequired}
+              onCheckedChange={(checked) => updateOption('markImportedNoDocRequired', checked)}
+              disabled={!options.importTransactions || !hasTransactions}
+            />
+          </div>
         </CardContent>
       </Card>
 

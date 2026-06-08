@@ -109,6 +109,7 @@ export const POST = withRouteContext(
           importTransactions: options.importTransactions,
           voucherSeries: options.voucherSeries || companyDefaultSeries,
           updateAccountNames: options.updateAccountNames ?? true,
+          markImportedNoDocRequired: options.markImportedNoDocRequired ?? false,
         },
       )
 
