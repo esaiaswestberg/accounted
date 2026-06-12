@@ -147,12 +147,10 @@ describe('POST /api/mcp-oauth/token', () => {
     it('rotates both tokens and returns a fresh access_token', async () => {
       const { token: refreshToken } = generateRefreshToken()
 
-      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      const { supabase, enqueue } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
-      enqueueMany([
-        { data: { id: 'key-1', revoked_at: null }, error: null }, // SELECT
-        { data: [{ id: 'key-1' }], error: null }, // UPDATE ... RETURNING
-      ])
+      // rotate_mcp_refresh_token RPC → normal rotation
+      enqueue({ data: [{ outcome: 'rotated', scopes: null }], error: null })
 
       const res = await POST(
         formRequest({
@@ -179,7 +177,7 @@ describe('POST /api/mcp-oauth/token', () => {
     it('returns 400 when refresh_token is unknown', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
-      enqueue({ data: null, error: null }) // SELECT — no row
+      enqueue({ data: [{ outcome: 'invalid', scopes: null }], error: null })
 
       const res = await POST(
         formRequest({
@@ -195,10 +193,7 @@ describe('POST /api/mcp-oauth/token', () => {
     it('returns 400 when the api_key is revoked', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
-      enqueue({
-        data: { id: 'key-1', revoked_at: '2026-05-01T00:00:00Z' },
-        error: null,
-      })
+      enqueue({ data: [{ outcome: 'revoked', scopes: null }], error: null })
 
       const res = await POST(
         formRequest({
@@ -212,7 +207,7 @@ describe('POST /api/mcp-oauth/token', () => {
       expect(body.error_description).toContain('revoked')
     })
 
-    it('returns 500 when the lookup fails with a DB error', async () => {
+    it('returns 500 when the rotation RPC fails with a DB error', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
       enqueue({ data: null, error: { message: 'connection reset' } })
@@ -228,32 +223,12 @@ describe('POST /api/mcp-oauth/token', () => {
       expect(body.error).toBe('server_error')
     })
 
-    it('returns 500 when the rotation update fails with a DB error', async () => {
-      const { supabase, enqueueMany } = createQueuedMockSupabase()
+    it('returns 400 invalid_grant when a refresh token is reused after its grace window (reuse_revoked)', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
-      enqueueMany([
-        { data: { id: 'key-1', revoked_at: null }, error: null }, // SELECT
-        { data: null, error: { message: 'deadlock detected' } }, // UPDATE — DB error
-      ])
-
-      const res = await POST(
-        formRequest({
-          grant_type: 'refresh_token',
-          refresh_token: 'gnubok_rt_anything',
-        })
-      )
-      expect(res.status).toBe(500)
-      const body = await res.json()
-      expect(body.error).toBe('server_error')
-    })
-
-    it('returns 400 when the CAS update affects 0 rows (concurrent reuse)', async () => {
-      const { supabase, enqueueMany } = createQueuedMockSupabase()
-      mocks.supabaseFactory.mockReturnValue(supabase)
-      enqueueMany([
-        { data: { id: 'key-1', revoked_at: null }, error: null }, // SELECT
-        { data: [], error: null }, // UPDATE — 0 rows (lost the CAS race)
-      ])
+      // The RPC detected reuse of a previous refresh token past its grace
+      // window and already revoked the grant family (RFC 9700 §4.14.2).
+      enqueue({ data: [{ outcome: 'reuse_revoked', scopes: null }], error: null })
 
       const res = await POST(
         formRequest({
@@ -264,7 +239,29 @@ describe('POST /api/mcp-oauth/token', () => {
       expect(res.status).toBe(400)
       const body = await res.json()
       expect(body.error).toBe('invalid_grant')
-      expect(body.error_description).toContain('already used')
+    })
+
+    it('returns a fresh pair on idempotent in-grace replay instead of 400 (issue #710 regression)', async () => {
+      // A retried / mis-persisted / concurrent refresh presents the previous
+      // refresh token within the grace window. The old code returned 400
+      // "already used", stranding Claude Code into a re-auth loop; the RPC now
+      // replays idempotently and the client gets a working pair.
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueue({ data: [{ outcome: 'replayed', scopes: ['transactions:read'] }], error: null })
+
+      const res = await POST(
+        formRequest({
+          grant_type: 'refresh_token',
+          refresh_token: 'gnubok_rt_anything',
+        })
+      )
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.access_token).toMatch(/^gnubok_sk_/)
+      expect(body.refresh_token).toMatch(/^gnubok_rt_/)
+      expect(body.expires_in).toBe(3600)
+      expect(body.scope).toBe('transactions:read')
     })
   })
 
@@ -387,19 +384,17 @@ describe('POST /api/mcp-oauth/token', () => {
     it('returns the granular scopes the api_key was minted with', async () => {
       // Greptile P1 — refresh response previously hardcoded scope:'mcp',
       // causing OAuth 2.1 clients to think they had lost their grant.
-      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      const { supabase, enqueue } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
-      enqueueMany([
-        {
-          data: {
-            id: 'key-1',
-            revoked_at: null,
+      enqueue({
+        data: [
+          {
+            outcome: 'rotated',
             scopes: ['transactions:read', 'invoices:read', 'invoices:write'],
           },
-          error: null,
-        }, // SELECT
-        { data: [{ id: 'key-1' }], error: null }, // UPDATE
-      ])
+        ],
+        error: null,
+      })
 
       const res = await POST(
         formRequest({
@@ -415,12 +410,9 @@ describe('POST /api/mcp-oauth/token', () => {
     })
 
     it('falls back to read-only DEFAULT_OAUTH_SCOPES for legacy keys with null scopes', async () => {
-      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      const { supabase, enqueue } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
-      enqueueMany([
-        { data: { id: 'key-1', revoked_at: null, scopes: null }, error: null },
-        { data: [{ id: 'key-1' }], error: null },
-      ])
+      enqueue({ data: [{ outcome: 'rotated', scopes: null }], error: null })
 
       const res = await POST(
         formRequest({

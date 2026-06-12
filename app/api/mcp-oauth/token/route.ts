@@ -13,6 +13,13 @@ import { requireCompanyId } from '@/lib/company/context'
 
 const ACCESS_TOKEN_TTL_SECONDS = 3600
 
+// Grace window (seconds) during which a just-superseded access token and refresh
+// token stay valid after a rotation. Lets a client that cannot reliably persist
+// the rotated refresh token — or that fires concurrent refreshes — recover via
+// idempotent replay instead of being forced into a re-auth loop (issue #710).
+// Reuse of a previous refresh token AFTER this window revokes the grant.
+const REFRESH_GRACE_SECONDS = 120
+
 /**
  * OAuth 2.0 Token Endpoint.
  *
@@ -184,75 +191,54 @@ async function handleRefreshTokenGrant(params: URLSearchParams) {
   const supabase = createServiceClientNoCookies()
   const presentedHash = hashRefreshToken(refreshToken)
 
-  // Look up the api_key row by refresh_token_hash. The hash is unique among
-  // non-null values, so there's at most one match. We pull `scopes` so the
-  // rotated token response advertises the same granular grant the key
-  // already carries (otherwise OAuth 2.1 clients would re-authorize on
-  // every refresh).
-  const { data: row, error: lookupError } = await supabase
-    .from('api_keys')
-    .select('id, revoked_at, scopes')
-    .eq('refresh_token_hash', presentedHash)
-    .maybeSingle()
-
-  if (lookupError) {
-    return NextResponse.json(
-      { error: 'server_error', error_description: 'Failed to look up refresh token' },
-      { status: 500 }
-    )
-  }
-
-  if (!row) {
-    return NextResponse.json(
-      { error: 'invalid_grant', error_description: 'Invalid refresh token' },
-      { status: 400 }
-    )
-  }
-
-  if (row.revoked_at) {
-    return NextResponse.json(
-      { error: 'invalid_grant', error_description: 'Refresh token revoked' },
-      { status: 400 }
-    )
-  }
-
-  // Rotate both tokens atomically. OAuth 2.1 §6.1 recommends rotating the
-  // refresh token; we also rotate the api_key because key_hash is one-way
-  // and we cannot recover the original plaintext to return to the client.
-  // The .eq('refresh_token_hash', presentedHash) guard makes this a CAS:
-  // a concurrent refresh with the same token will affect 0 rows.
+  // Pre-generate the candidate credentials; the RPC decides whether to use them
+  // (rotate / idempotent replay) or ignore them (reuse / revoked / invalid).
+  // Doing lookup + rotate + demote in ONE SECURITY DEFINER RPC closes the
+  // TOCTOU gap the old SELECT-then-CAS had, and lets a just-superseded refresh
+  // token stay valid for a grace window so a client that cannot persist the
+  // rotated token — or fires concurrent refreshes — recovers instead of being
+  // forced into a re-auth loop (issue #710). Reuse AFTER the grace window
+  // revokes the grant (RFC 9700 §4.14.2 reuse detection).
   const rotated = generateRefreshToken()
   const { key: newKey, hash: newKeyHash, prefix: newKeyPrefix } = generateApiKey()
 
-  const { data: updated, error: updateError } = await supabase
-    .from('api_keys')
-    .update({
-      refresh_token_hash: rotated.hash,
-      key_hash: newKeyHash,
-      key_prefix: newKeyPrefix,
-    })
-    .eq('id', row.id)
-    .eq('refresh_token_hash', presentedHash)
-    .select('id')
+  const { data, error } = await supabase.rpc('rotate_mcp_refresh_token', {
+    p_presented_hash: presentedHash,
+    p_new_refresh_hash: rotated.hash,
+    p_new_key_hash: newKeyHash,
+    p_new_key_prefix: newKeyPrefix,
+    p_grace_seconds: REFRESH_GRACE_SECONDS,
+  })
 
-  if (updateError) {
+  if (error) {
     return NextResponse.json(
       { error: 'server_error', error_description: 'Failed to rotate refresh token' },
       { status: 500 }
     )
   }
 
-  if (!updated || updated.length === 0) {
+  const result = (Array.isArray(data) ? data[0] : data) as
+    | { outcome: string; scopes: string[] | null }
+    | undefined
+  const outcome = result?.outcome
+
+  // 'rotated' (normal) and 'replayed' (idempotent in-grace retry/concurrent)
+  // both succeed and return the freshly minted pair. Everything else maps to
+  // invalid_grant; for 'reuse_revoked' the grant was already revoked in the RPC.
+  if (outcome !== 'rotated' && outcome !== 'replayed') {
     return NextResponse.json(
-      { error: 'invalid_grant', error_description: 'Refresh token already used' },
+      {
+        error: 'invalid_grant',
+        error_description:
+          outcome === 'revoked' ? 'Refresh token revoked' : 'Invalid or expired refresh token',
+      },
       { status: 400 }
     )
   }
 
-  // Return the granular scopes the key was originally minted with. Falling
-  // back to the read-only OAuth defaults preserves the pre-scope-plumbing
-  // behaviour for legacy keys whose scopes column is null.
-  const persistedScopes = validateScopes(row.scopes) ?? DEFAULT_OAUTH_SCOPES
+  // Carry the granular scopes the key was minted with (read-only OAuth defaults
+  // for legacy keys with null scopes) so clients don't re-authorize on refresh.
+  const persistedScopes = validateScopes(result?.scopes ?? null) ?? DEFAULT_OAUTH_SCOPES
 
   return NextResponse.json({
     access_token: newKey,
