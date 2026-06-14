@@ -16,10 +16,10 @@ export const DELETE = withRouteContext(
   'sie_import.undo',
   async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
-    const { supabase, companyId, log, requestId } = ctx
+    const { supabase, companyId, user, log, requestId } = ctx
     const opLog = log.child({ sieImportId: id })
 
-    const result = await undoSIEImport(supabase, companyId!, id)
+    const result = await undoSIEImport(supabase, companyId!, id, user.id)
 
     if (!result.success) {
       return errorResponseFromCode('SIE_UNDO_FAILED', opLog, {

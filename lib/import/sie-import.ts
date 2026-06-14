@@ -158,6 +158,29 @@ export async function checkDuplicatePeriodImport(
 }
 
 /**
+ * Client for the bulk hard-delete RPCs (replace_sie_import / undo_sie_import).
+ *
+ * The authenticated role carries statement_timeout=8s on hosted Supabase,
+ * and deleting a large import (thousands of journal_entries, each firing
+ * write_audit_log with a JSONB old_state snapshot, plus cascading lines)
+ * does not finish inside that budget — the RPC dies with "canceling
+ * statement due to statement timeout" and rolls back. The service role has
+ * no statement_timeout, so the RPC runs on it instead.
+ *
+ * Safe escalation: callers validate company ownership against the
+ * RLS-scoped session client BEFORE the RPC, and the RPC itself (SECURITY
+ * DEFINER) re-filters every statement on p_company_id.
+ *
+ * Falls back to the caller's client when the service key is absent
+ * (unit tests, misconfigured self-hosted) — same behavior as before.
+ */
+async function rpcClientForBulkDelete(fallback: SupabaseClient): Promise<SupabaseClient> {
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) return fallback
+  const { createServiceClient } = await import('@/lib/supabase/server')
+  return createServiceClient()
+}
+
+/**
  * Replace a completed SIE import so the user can re-import corrected data
  * for the same fiscal period.
  *
@@ -210,8 +233,10 @@ export async function replaceSIEImport(
     }
   }
 
-  // 3. Atomically delete entries and mark import as replaced via DB RPC
-  const { data: deletedCount, error: rpcError } = await supabase.rpc('replace_sie_import', {
+  // 3. Atomically delete entries and mark import as replaced via DB RPC.
+  // Runs on the service client — see rpcClientForBulkDelete.
+  const rpcClient = await rpcClientForBulkDelete(supabase)
+  const { data: deletedCount, error: rpcError } = await rpcClient.rpc('replace_sie_import', {
     p_company_id: companyId,
     p_import_id: importId,
   })
@@ -231,11 +256,17 @@ export async function replaceSIEImport(
  * Pre-flight checks mirror replaceSIEImport so the user gets a Swedish
  * error message before the RPC raises. The RPC itself is idempotent on
  * status — calling twice surfaces the "not in completed status" error.
+ *
+ * `userId` is the authorising user. It is passed to the RPC as p_user_id
+ * because the RPC may run on the service client (see rpcClientForBulkDelete),
+ * where auth.uid() is NULL — without it the RPC's owner/admin gate can never
+ * match and always raises. The RPC enforces owner/admin against this id.
  */
 export async function undoSIEImport(
   supabase: SupabaseClient,
   companyId: string,
-  importId: string
+  importId: string,
+  userId: string
 ): Promise<{ success: boolean; deletedEntries: number; error?: string }> {
   const { data: importRecord } = await supabase
     .from('sie_imports')
@@ -265,9 +296,14 @@ export async function undoSIEImport(
     }
   }
 
-  const { data: deletedCount, error: rpcError } = await supabase.rpc('undo_sie_import', {
+  // Runs on the service client — see rpcClientForBulkDelete. Pass the
+  // authorising user explicitly: on the service client auth.uid() is NULL,
+  // so the RPC's owner/admin gate resolves against p_user_id instead.
+  const rpcClient = await rpcClientForBulkDelete(supabase)
+  const { data: deletedCount, error: rpcError } = await rpcClient.rpc('undo_sie_import', {
     p_company_id: companyId,
     p_import_id: importId,
+    p_user_id: userId,
   })
 
   if (rpcError) {

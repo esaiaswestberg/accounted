@@ -34,7 +34,7 @@ function makeRequest(params: Record<string, string>) {
 
 function mockChain(result: { data?: unknown; error?: unknown }) {
   const chain: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'single', 'update', 'order', 'limit']) {
+  for (const m of ['select', 'eq', 'in', 'single', 'update', 'order', 'limit']) {
     chain[m] = vi.fn().mockReturnValue(chain)
   }
   chain.single = vi.fn().mockResolvedValue({ data: result.data ?? null, error: result.error ?? null })

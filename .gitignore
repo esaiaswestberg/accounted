@@ -87,7 +87,10 @@ supabase/.temp/
 # out of the box without running the generator.
 supabase/.branches/
 
-/scripts
-
 # Local-only SIE test fixtures — may contain real/scrubbed company data, never commit
 tests/fixtures/sie/
+
+# Diagnostic/cleanup tooling under /scripts is tracked, but the DATA those
+# scripts read or emit (ledger dumps, reconciliation exports) is real customer
+# räkenskapsinformation — never commit it. Keep the .ts/.sql tooling, ignore the data.
+scripts/*.csv

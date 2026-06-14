@@ -2550,6 +2550,7 @@ async function commitImportSie(
 
 async function commitUndoSieImport(
   supabase: SupabaseClient,
+  userId: string,
   companyId: string,
   params: Record<string, unknown>,
 ): Promise<ExecutorResult> {
@@ -2559,7 +2560,7 @@ async function commitUndoSieImport(
     return { error: 'import_id is required', status: 400 }
   }
 
-  const result = await undoSIEImport(supabase, companyId, importId)
+  const result = await undoSIEImport(supabase, companyId, importId, userId)
   if (!result.success) {
     return { error: result.error ?? 'SIE undo failed', status: 400 }
   }
@@ -3459,7 +3460,7 @@ async function commitPendingOperationInner(
         result = await commitImportSie(supabase, userId, companyId, pendingOp.params)
         break
       case 'undo_sie_import':
-        result = await commitUndoSieImport(supabase, companyId, pendingOp.params)
+        result = await commitUndoSieImport(supabase, userId, companyId, pendingOp.params)
         break
       case 'create_voucher':
         result = await commitCreateVoucher(supabase, userId, companyId, pendingOp.params, opts)
